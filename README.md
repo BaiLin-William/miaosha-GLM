@@ -80,17 +80,20 @@ XHR 拦截到验证码响应               监听 window message
 
 ## 快速开始
 
-### 环境要求
+### 方式一：下载预编译包（推荐）
 
-- Node.js >= 18
-- pnpm（本项目使用 pnpm@10.33.0）
-- Chrome / Chromium 浏览器
+1. 下载 zip 压缩包：[miaosha-GLM.zip](https://github.com/Rocke1001feller/miaosha-GLM/releases/download/1.0.0.alpha/miaosha-GLM-chrome-mv3-1.0.0.alpha.zip)
+2. 解压 zip 文件（见下方[解压说明](#zip-解压说明)）
+3. 打开 Chrome 浏览器，访问 `chrome://extensions`
+4. 开启右上角的「开发者模式」
+5. 点击「加载已解压的扩展程序」，选择解压后的 `chrome-mv3` 文件夹
+6. 完成！扩展图标将出现在浏览器工具栏
 
-### 安装与构建
+### 方式二：从源码构建
 
 ```bash
 # 克隆仓库
-git clone https://github.com/<your-username>/miaosha-GLM.git
+git clone https://github.com/Rocke1001feller/miaosha-GLM.git
 cd miaosha-GLM
 
 # 安装依赖
@@ -113,9 +116,28 @@ pnpm build
 ### 使用流程
 
 1. 打开 [bigmodel.cn/glm-coding](https://bigmodel.cn/glm-coding) 并登录
-2. 在选项页配置秒杀时间（默认 09:54:59.999 上海时区）
+2. 在扩展选项页配置秒杀时间（默认 09:54:59.999 上海时区）
 3. 扩展自动预取验证码、校准服务器时间
 4. 秒杀瞬间点击「开火」或等待自动开火
+
+### ZIP 解压说明
+
+根据你的操作系统，解压下载的 zip 文件：
+
+**macOS**
+- 双击 `miaosha-GLM.zip` 文件，系统自动解压到同名文件夹
+- 或右键选择「用归档实用工具打开」
+
+**Windows**
+- 右键点击 `miaosha-GLM.zip` → 选择「全部解压缩」
+- 或使用 7-Zip、WinRAR 等工具解压
+
+**Linux**
+```bash
+unzip miaosha-GLM.zip -d miaosha-GLM
+```
+
+解压后你会看到一个 `chrome-mv3` 文件夹，这就是需要加载到 Chrome 的扩展目录。
 
 ---
 
