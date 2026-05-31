@@ -1,0 +1,9 @@
+.uv_python
+.uv_cache
+node_modules
+.wxt
+.output
+output
+.DS_Store
+reference-for-delete
+.tmp

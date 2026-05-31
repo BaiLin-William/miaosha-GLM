@@ -1,0 +1,39 @@
+{
+  "name": "miaosha-GLM",
+  "version": "1.0.0",
+  "description": "智谱 Coding Plan 秒杀助手浏览器扩展",
+  "main": "index.js",
+  "scripts": {
+    "dev": "wxt",
+    "build:overlay": "node scripts/build-overlay.js",
+    "regression:target-products": "node scripts/regression-target-products.js",
+    "regression:target-products:e2e": "node scripts/regression-target-products-e2e.js",
+    "build": "node scripts/build-overlay.js && wxt build && npm run regression:target-products && npm run regression:target-products:e2e",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest run --coverage"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.33.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/svelte": "^5.3.1",
+    "@testing-library/user-event": "^14.6.1",
+    "@vitest/ui": "^4.1.7",
+    "@wxt-dev/module-svelte": "^2.0.5",
+    "happy-dom": "^20.9.0",
+    "playwright-core": "^1.56.1",
+    "svelte": "^5.55.10",
+    "vitest": "^4.1.7",
+    "wxt": "^0.20.26"
+  }
+}
