@@ -177,6 +177,45 @@ async function initReminderLoop() {
 }
 // ── End R3 ─────────────────────────────────────────────────────────────────
 
+// ── Force-Stop Banner (shown during batch captcha mode) ────────────────────
+
+function createForceStopBanner() {
+  removeForceStopBanner();
+  const el = document.createElement('div');
+  el.id = 'miaosha-force-stop-banner';
+  el.innerHTML = `
+    <div style="
+      position: fixed; top: 0; left: 0; right: 0; z-index: 2147483647;
+      background: linear-gradient(135deg, #dc2626, #ef4444);
+      color: #fff; padding: 10px 20px; font-size: 14px;
+      font-weight: 800; text-align: center;
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      box-shadow: 0 4px 20px rgba(220,38,38,0.4);
+      animation: miaoshaPulse 1s ease-in-out infinite alternate;
+      font-family: system-ui, -apple-system, sans-serif;
+    ">
+      <span>&#9632; Batch Mode Active — solving captchas</span>
+      <kbd style="
+        padding: 2px 8px; background: rgba(255,255,255,0.25);
+        border: 1px solid rgba(255,255,255,0.5); border-radius: 4px;
+        font-size: 12px; font-weight: 700; font-family: monospace;
+      ">Esc</kbd>
+      <span>to force stop</span>
+    </div>
+    <style>
+      @keyframes miaoshaPulse {
+        from { opacity: 0.85; transform: scale(1); }
+        to { opacity: 1; transform: scale(1.01); }
+      }
+    </style>
+  `;
+  document.body.appendChild(el);
+}
+
+function removeForceStopBanner() {
+  document.getElementById('miaosha-force-stop-banner')?.remove();
+}
+
 function isExpired(t: any): boolean {
   return Date.now() - t.createdAt > TICKET_TTL_MS;
 }
@@ -953,6 +992,15 @@ export default defineContentScript({
       if (type === 'CAPTCHA_ERROR' && payload) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> Captcha error: ' + payload.msg });
         try { chrome.runtime.sendMessage({ type: 'CAPTCHA_ERROR', msg: payload.msg }); } catch {}
+      }
+
+      // ── Batch mode status → full-width force-stop banner ──
+      if (type === 'BATCH_MODE_STATUS') {
+        if (payload?.active) {
+          createForceStopBanner();
+        } else {
+          removeForceStopBanner();
+        }
       }
 
       // ── Payment preview intercepted ──

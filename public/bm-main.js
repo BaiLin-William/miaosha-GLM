@@ -145,6 +145,7 @@ var CAPTCHA_APPID = '196026326';
 var S = {}; // state
 var _batchMode = false; // batch continuous captcha solving
 var _batchCount = 0; // captchas solved in current batch session
+var _activeCaptcha = null; // reference to the currently open TencentCaptcha instance (for force-destroy on ESC)
 var BATCH_SESSION_LIMIT = 50; // auto-stop after this many per session (default 50, updatable via CAPTCHA_CONFIG)
 var _authFailed = false; // true when batch-preview API returns code=1001 (not logged in)
 
@@ -284,6 +285,7 @@ function produceCaptcha() {
   if (typeof window.TencentCaptcha === 'undefined') { postMsg('CAPTCHA_ERROR', { msg: 'SDK not loaded' }); return; }
   try {
     var c = new window.TencentCaptcha(CAPTCHA_APPID, function(res) {
+      _activeCaptcha = null;
       if (res.ret === 0 && res.ticket) {
         postMsg('CAPTCHA_PRODUCED', { ticket: res.ticket, randstr: res.randstr });
         // Batch mode: count and auto-stop at session limit
@@ -301,8 +303,16 @@ function produceCaptcha() {
         if (_batchMode) { setTimeout(produceCaptcha, 500); }
       }
     }, { mode: 'popup' });
+    _activeCaptcha = c;
     c.show();
   } catch(e) { postMsg('CAPTCHA_ERROR', { msg: e.message }); }
+}
+
+// Force-destroy the currently active captcha modal (for ESC / force-stop)
+function destroyActiveCaptcha() {
+  if (!_activeCaptcha) return;
+  try { _activeCaptcha.destroy(); } catch(e) {}
+  _activeCaptcha = null;
 }
 
 function setBatchMode(on) {
@@ -322,7 +332,14 @@ function setBatchMode(on) {
       btn.style.background = '';
     }
   }
-  if (on) produceCaptcha();
+  // Notify ISOLATED world to show/hide the full-width force-stop banner
+  postMsg('BATCH_MODE_STATUS', { active: on });
+  if (on) {
+    produceCaptcha();
+  } else {
+    // Immediately close any active captcha modal
+    destroyActiveCaptcha();
+  }
 }
 
 function toggleBatchMode() { setBatchMode(!_batchMode); }
@@ -333,6 +350,9 @@ function setupCaptchaKeyboard() {
     if (e.key === 'Escape' && _batchMode) {
       e.preventDefault();
       e.stopPropagation();
+      // Force-destroy the modal BEFORE setting batch mode off,
+      // so the modal closes instantly without waiting for callback.
+      destroyActiveCaptcha();
       setBatchMode(false);
     }
   }, true);

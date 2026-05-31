@@ -8,7 +8,7 @@
  * Operations: R/U
  *
  * Resolution chain:
- *   global default (development) > stored value
+ *   global default (production) > stored value
  *
  * Consumers:
  *   - options page (UI surface)
@@ -21,7 +21,7 @@ import { storage } from '#imports';
 export type DevMode = 'development' | 'production';
 
 const DEV_MODE_KEY = 'local:devMode';
-const DEFAULT_MODE: DevMode = 'development';
+const DEFAULT_MODE: DevMode = 'production';
 
 export const devEnvironment = {
   async get(): Promise<DevMode> {

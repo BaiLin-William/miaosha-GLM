@@ -1,6 +1,6 @@
 {
   "name": "miaosha-GLM",
-  "version": "1.0.0",
+  "version": "1.0.0.alpha",
   "description": "智谱 Coding Plan 秒杀助手浏览器扩展",
   "main": "index.js",
   "scripts": {
@@ -13,7 +13,7 @@
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
-    "zip": "node scripts/build-overlay.js && wxt zip"
+    "zip": "node scripts/build-overlay.js && wxt zip && node scripts/zip-prepare.js"
   },
   "keywords": [],
   "author": "",

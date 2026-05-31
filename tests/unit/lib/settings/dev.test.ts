@@ -7,14 +7,14 @@ import { devEnvironment } from '../../../../lib/settings/dev';
 
 describe('devEnvironment', () => {
   describe('default', () => {
-    it('is "development"', () => {
-      expect(devEnvironment.default()).toBe('development');
+    it('is "production"', () => {
+      expect(devEnvironment.default()).toBe('production');
     });
   });
 
   describe('get (empty state)', () => {
-    it('returns "development" when storage is empty', async () => {
-      expect(await devEnvironment.get()).toBe('development');
+    it('returns "production" when storage is empty', async () => {
+      expect(await devEnvironment.get()).toBe('production');
     });
   });
 

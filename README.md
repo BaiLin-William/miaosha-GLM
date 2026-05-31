@@ -86,7 +86,7 @@ XHR 拦截到验证码响应               监听 window message
 2. 解压 zip 文件（见下方[解压说明](#zip-解压说明)）
 3. 打开 Chrome 浏览器，访问 `chrome://extensions`
 4. 开启右上角的「开发者模式」
-5. 点击「加载已解压的扩展程序」，选择解压后的 `chrome-mv3` 文件夹
+5. 点击「加载已解压的扩展程序」，选择解压后的 `智谱秒杀助手` 文件夹
 6. 完成！扩展图标将出现在浏览器工具栏
 
 ### 方式二：从源码构建
@@ -106,13 +106,6 @@ pnpm dev
 pnpm build
 ```
 
-### 加载扩展
-
-1. 打开 `chrome://extensions`
-2. 开启「开发者模式」
-3. 点击「加载已解压的扩展程序」
-4. 选择 `output/chrome-mv3/` 目录
-
 ### 使用流程
 
 1. 打开 [bigmodel.cn/glm-coding](https://bigmodel.cn/glm-coding) 并登录
@@ -125,19 +118,19 @@ pnpm build
 根据你的操作系统，解压下载的 zip 文件：
 
 **macOS**
-- 双击 `miaosha-GLM.zip` 文件，系统自动解压到同名文件夹
+- 双击 `miaosha-GLM-chrome-mv3-1.0.0.alpha.zip`，系统自动解压
 - 或右键选择「用归档实用工具打开」
 
 **Windows**
-- 右键点击 `miaosha-GLM.zip` → 选择「全部解压缩」
+- 右键点击 zip 文件 → 选择「全部解压缩」
 - 或使用 7-Zip、WinRAR 等工具解压
 
 **Linux**
 ```bash
-unzip miaosha-GLM.zip -d miaosha-GLM
+unzip miaosha-GLM-chrome-mv3-1.0.0.alpha.zip
 ```
 
-解压后你会看到一个 `chrome-mv3` 文件夹，这就是需要加载到 Chrome 的扩展目录。
+解压后你会看到一个 `智谱秒杀助手` 文件夹，直接选择该文件夹加载到 Chrome 即可。
 
 ---
 
