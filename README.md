@@ -82,7 +82,7 @@ XHR 拦截到验证码响应               监听 window message
 
 ### 方式一：下载预编译包（推荐）
 
-1. 下载 zip 压缩包：[miaosha-GLM.zip](https://github.com/Rocke1001feller/miaosha-GLM/releases/download/1.0.0.alpha/miaosha-GLM-chrome-mv3-1.0.0.alpha.zip)
+1. 下载 zip 压缩包：[miaosha-GLM.zip](https://github.com/Rocke1001feller/miaosha-GLM/releases/download/1.0.0.alpha/miaosha-glm-1.0.0.alpha-chrome.zip)
 2. 解压 zip 文件（见下方[解压说明](#zip-解压说明)）
 3. 打开 Chrome 浏览器，访问 `chrome://extensions`
 4. 开启右上角的「开发者模式」
