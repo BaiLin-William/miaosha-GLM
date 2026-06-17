@@ -1,0 +1,1578 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>miaosha-GLM · 系统性 Codebase 指南</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --bg-soft: #1e293b;
+      --bg-card: rgba(30, 41, 59, 0.7);
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --primary: #6366f1;
+      --primary-soft: rgba(99, 102, 241, 0.15);
+      --accent: #10b981;
+      --accent-soft: rgba(16, 185, 129, 0.15);
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --border: rgba(148, 163, 184, 0.15);
+      --radius: 16px;
+      --shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      --font: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --mono: 'SF Mono', 'Fira Code', Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(circle at 15% 20%, rgba(99, 102, 241, 0.12), transparent 40%),
+        radial-gradient(circle at 85% 80%, rgba(16, 185, 129, 0.08), transparent 40%);
+      pointer-events: none;
+      z-index: -1;
+    }
+
+    /* Layout */
+    .app-shell {
+      min-height: 100vh;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 260px;
+      height: 100vh;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(20px);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      z-index: 100;
+    }
+
+    .brand {
+      padding: 28px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand-title {
+      font-size: 18px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #818cf8, #34d399);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+      font-family: var(--mono);
+    }
+
+    .nav-section {
+      padding: 20px 16px;
+      flex: 1;
+    }
+
+    .nav-title {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      padding-left: 8px;
+    }
+
+    .nav-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.2s;
+      cursor: pointer;
+      border: 1px solid transparent;
+    }
+
+    .nav-item:hover {
+      background: var(--primary-soft);
+      color: var(--text);
+    }
+
+    .nav-item.active {
+      background: var(--primary-soft);
+      color: #c7d2fe;
+      border-color: rgba(99, 102, 241, 0.3);
+    }
+
+    .nav-item .layer-id {
+      font-family: var(--mono);
+      font-size: 10px;
+      width: 28px;
+      height: 20px;
+      display: grid;
+      place-items: center;
+      border-radius: 5px;
+      background: rgba(255, 255, 255, 0.06);
+      color: inherit;
+    }
+
+    .sidebar-footer {
+      padding: 16px 24px;
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--text-muted);
+      text-align: center;
+    }
+
+    /* Main */
+    .main {
+      margin-left: 260px;
+      padding: 32px 40px 60px;
+      max-width: 1200px;
+      width: calc(100% - 260px);
+      min-width: 0;
+    }
+
+    /* Header */
+    .hero {
+      margin-bottom: 40px;
+    }
+
+    .hero-kicker {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+
+    .hero h1 {
+      font-size: clamp(2rem, 4vw, 3rem);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1.2;
+      margin-bottom: 16px;
+    }
+
+    .hero-desc {
+      color: var(--text-muted);
+      font-size: 16px;
+      max-width: 700px;
+    }
+
+    .hero-meta {
+      display: flex;
+      gap: 16px;
+      margin-top: 20px;
+      flex-wrap: wrap;
+    }
+
+    .meta-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: var(--bg-soft);
+      border: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .meta-chip strong { color: var(--text); }
+
+    /* Section */
+    .section {
+      margin-bottom: 48px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .section-header h2 {
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .section-header .tag {
+      font-size: 11px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      background: var(--primary-soft);
+      color: #c7d2fe;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+    }
+
+    .card h3 {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 12px;
+      color: var(--text);
+    }
+
+    .card p, .card li {
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+
+    .card ul {
+      margin-left: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    /* Matrix Controls */
+    .matrix-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+
+    .dim-btn {
+      padding: 8px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: inherit;
+    }
+
+    .dim-btn:hover {
+      background: var(--primary-soft);
+      color: var(--text);
+    }
+
+    .dim-btn.active {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+    }
+
+    /* Matrix */
+    .matrix-table {
+      display: grid;
+      grid-template-columns: 220px repeat(6, 1fr);
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 8px;
+    }
+
+    .matrix-header {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      padding: 12px;
+      text-align: center;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 10px;
+      position: sticky;
+      top: 0;
+    }
+
+    .matrix-header:first-child { text-align: left; }
+
+    .matrix-layer {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 12px;
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.03);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .matrix-layer:hover { background: var(--primary-soft); }
+    .matrix-layer.active { background: var(--primary-soft); color: #c7d2fe; }
+
+    .matrix-layer .lid {
+      font-family: var(--mono);
+      font-size: 10px;
+      padding: 3px 7px;
+      border-radius: 5px;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .matrix-cell {
+      padding: 12px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: all 0.2s;
+      min-height: 80px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+    }
+
+    .matrix-cell:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--border);
+      transform: translateY(-2px);
+    }
+
+    .matrix-cell.active {
+      background: var(--primary-soft);
+      border-color: rgba(99, 102, 241, 0.4);
+    }
+
+    .matrix-cell .cell-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .matrix-cell .cell-preview {
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.4;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .matrix-cell .dim-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+
+    /* Detail Panel */
+    .detail-panel {
+      margin-top: 24px;
+      display: none;
+    }
+
+    .detail-panel.open { display: block; }
+
+    .detail-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 16px;
+    }
+
+    .detail-header h3 {
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .detail-badges {
+      display: flex;
+      gap: 8px;
+    }
+
+    .badge {
+      font-size: 10px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .badge-layer { background: var(--primary-soft); color: #c7d2fe; }
+    .badge-dim { background: var(--accent-soft); color: #6ee7b7; }
+
+    .detail-body {
+      color: var(--text-muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .detail-body p { margin-bottom: 12px; }
+    .detail-body ul { margin-left: 18px; margin-bottom: 12px; }
+    .detail-body li { margin-bottom: 6px; }
+    .detail-body code {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: rgba(255, 255, 255, 0.08);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: #c7d2fe;
+    }
+
+    .file-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 12px;
+    }
+
+    .file-item {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 16px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      transition: all 0.2s;
+    }
+
+    .file-item:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(99, 102, 241, 0.3);
+    }
+
+    .file-path {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: #818cf8;
+      word-break: break-all;
+    }
+
+    .file-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .flow-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+    }
+
+    .flow-card {
+      padding: 20px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+    }
+
+    .flow-card h4 {
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 12px;
+      color: var(--text);
+    }
+
+    .flow-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 10px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .flow-step .num {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--primary-soft);
+      color: #c7d2fe;
+      display: grid;
+      place-items: center;
+      font-size: 10px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    .quick-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .quick-links a {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 16px;
+      border-radius: 10px;
+      background: var(--bg-soft);
+      border: 1px solid var(--border);
+      color: var(--text);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+
+    .quick-links a:hover {
+      background: var(--primary-soft);
+      border-color: rgba(99, 102, 241, 0.4);
+    }
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+      .sidebar {
+        position: relative;
+        width: 100%;
+        height: auto;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+      }
+      .main { margin-left: 0; width: 100%; padding: 24px; }
+      .matrix-table { grid-template-columns: 160px repeat(6, 220px); }
+    }
+
+    @media (max-width: 640px) {
+      .main { padding: 20px 16px; width: 100%; }
+      .hero h1 { font-size: 1.75rem; }
+      .matrix-table { grid-template-columns: 140px repeat(6, 200px); }
+    }
+
+    /* Utility */
+    .highlight { color: var(--accent); }
+    .muted { color: var(--text-muted); }
+    .mono { font-family: var(--mono); }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .status-dot.green { background: var(--accent); }
+    .status-dot.yellow { background: var(--warning); }
+    .status-dot.red { background: var(--danger); }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-title">miaosha-GLM</div>
+        <div class="brand-sub">智谱秒杀助手 · Codebase Guide</div>
+      </div>
+      <nav class="nav-section">
+        <div class="nav-title">导航</div>
+        <div class="nav-list">
+          <a class="nav-item active" href="#overview" data-section="overview">
+            <span class="layer-id">◎</span> 项目概览
+          </a>
+          <a class="nav-item" href="#matrix" data-section="matrix">
+            <span class="layer-id">Mx</span> 层级 × 维度
+          </a>
+          <a class="nav-item" href="#architecture" data-section="architecture">
+            <span class="layer-id">Ar</span> 架构图
+          </a>
+          <a class="nav-item" href="#flows" data-section="flows">
+            <span class="layer-id">Fl</span> 核心数据流
+          </a>
+          <a class="nav-item" href="#files" data-section="files">
+            <span class="layer-id">Fi</span> 文件索引
+          </a>
+          <a class="nav-item" href="#links" data-section="links">
+            <span class="layer-id">Lk</span> 快速链接
+          </a>
+        </div>
+
+        <div class="nav-title" style="margin-top: 24px;">层级跳转</div>
+        <div class="nav-list" id="layer-nav"></div>
+      </nav>
+      <div class="sidebar-footer">
+        版本 v1.0.0.alpha · 当前分支 v1.2.1
+      </div>
+    </aside>
+
+    <main class="main">
+      <!-- Hero -->
+      <section class="section hero" id="overview">
+        <div class="hero-kicker">Chrome MV3 Browser Extension</div>
+        <h1>智谱 Coding Plan 秒杀助手</h1>
+        <p class="hero-desc">
+          一个系统性辅助抢购 bigmodel.cn 限量套餐的 Chrome 扩展。通过验证码预取、NTP 校时、
+          同源请求代理与自动并发开火，在秒杀瞬间以页面 origin 发起下单请求。
+        </p>
+        <div class="hero-meta">
+          <span class="meta-chip"><strong>框架</strong> WXT 0.20.26</span>
+          <span class="meta-chip"><strong>UI</strong> Svelte 5</span>
+          <span class="meta-chip"><strong>测试</strong> Vitest 4 + Playwright</span>
+          <span class="meta-chip"><strong>语言</strong> TypeScript</span>
+          <span class="meta-chip"><strong>状态</strong> <span class="status-dot green"></span> 积极开发</span>
+        </div>
+      </section>
+
+      <!-- Core Features -->
+      <section class="section" id="features">
+        <div class="section-header">
+          <h2>核心功能</h2>
+          <span class="tag">R1–R4 + DEV/PROD</span>
+        </div>
+        <div class="card">
+          <ul>
+            <li><strong>R1 倒计时提醒</strong>：系统通知 + 角标倒计时（60/30/15/5 分钟前）</li>
+            <li><strong>R2 验证码预取</strong>：拦截 Tencent CAPTCHA ticket，缓存 ticket 池</li>
+            <li><strong>R3 页面内提醒</strong>：bigmodel.cn 标签页顶部横幅 + 蜂鸣提示</li>
+            <li><strong>R4 角标倒计时</strong>：扩展图标 Badge 动态显示剩余时间</li>
+            <li><strong>DEV 模式</strong>：Popup 内直接调用 7 个 bigmodel API 端点</li>
+            <li><strong>PROD 模式</strong>：一键跳转 bigmodel.cn，配合页面覆盖层完成秒杀</li>
+            <li><strong>自动开火</strong>：基于服务器时间校准，在秒杀瞬间自动并发请求</li>
+            <li><strong>开火可视化</strong>：3×3 产品矩阵实时展示每发请求状态</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Matrix Section -->
+      <section class="section" id="matrix">
+        <div class="section-header">
+          <h2>层级 × 维度 信息矩阵</h2>
+          <span class="tag">点击单元格查看详情</span>
+        </div>
+
+        <div class="matrix-controls" id="dim-controls"></div>
+
+        <div class="card" style="padding: 16px;">
+          <div class="matrix-table" id="matrix-table"></div>
+          <div class="detail-panel" id="detail-panel">
+            <div class="detail-header">
+              <h3 id="detail-title"></h3>
+              <div class="detail-badges">
+                <span class="badge badge-layer" id="detail-layer-badge"></span>
+                <span class="badge badge-dim" id="detail-dim-badge"></span>
+              </div>
+            </div>
+            <div class="detail-body" id="detail-body"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Architecture -->
+      <section class="section" id="architecture">
+        <div class="section-header">
+          <h2>整体架构</h2>
+          <span class="tag">MV3 + MAIN World 注入</span>
+        </div>
+        <div class="card">
+          <pre style="font-family: var(--mono); font-size: 12px; line-height: 1.8; color: var(--text-muted); overflow-x: auto;">
+┌─────────────────────────────────────────────────────────────────┐
+│                      Chrome Extension (MV3)                      │
+│                                                                   │
+│  ┌──────────────┐   ┌──────────────────────────────────────────┐ │
+│  │   Background  │   │              bigmodel.cn Tab              │ │
+│  │ Service Worker│   │                                           │ │
+│  │               │   │  ┌─────────────┐    ┌─────────────────┐  │ │
+│  │ • Alarms API  │   │  │ bm-capture  │◄──►│   bm-main.js    │  │ │
+│  │ • Badge 角标  │   │  │ (ISOLATED)  │    │  (MAIN world)   │  │ │
+│  │ • 通知推送    │   │  │             │    │                  │  │ │
+│  │               │   │  │ • 倒计时UI  │    │ • XHR 拦截      │  │ │
+│  └───────┬───────┘   │  │ • Auth抓取  │    │ • 验证码监听     │  │ │
+│          │           │  │ • Storage桥 │    │ • 秒杀火力控制   │  │ │
+│  ┌───────▼───────┐   │  └─────────────┘    └─────────────────┘  │ │
+│  │    Popup       │   │                                           │ │
+│  │                │   └──────────────────────────────────────────┘ │
+│  │  ┌──────────┐  │                                                 │
+│  │  │ DEV 模式 │  │   chrome.storage.local ◄──── 所有组件共享存储  │
+│  │  │ API 调试 │  │                                                 │
+│  │  └──────────┘  │                                                 │
+│  │  ┌──────────┐  │                                                 │
+│  │  │ PROD 模式│  │                                                 │
+│  │  │ 秒杀操作 │  │                                                 │
+│  │  └──────────┘  │                                                 │
+│  └────────────────┘                                                 │
+└─────────────────────────────────────────────────────────────────────┘
+          </pre>
+        </div>
+      </section>
+
+      <!-- Flows -->
+      <section class="section" id="flows">
+        <div class="section-header">
+          <h2>核心数据流</h2>
+          <span class="tag">6 条关键链路</span>
+        </div>
+        <div class="flow-grid">
+          <div class="flow-card">
+            <h4>🔐 Auth 获取链路</h4>
+            <div class="flow-step"><span class="num">1</span>popup 打开 / content script 启动</div>
+            <div class="flow-step"><span class="num">2</span>chrome.scripting.executeScript → MAIN world</div>
+            <div class="flow-step"><span class="num">3</span>读取 cookie + localStorage</div>
+            <div class="flow-step"><span class="num">4</span>写入 local:authHeaders</div>
+          </div>
+          <div class="flow-card">
+            <h4>🎫 Ticket 预取链路</h4>
+            <div class="flow-step"><span class="num">1</span>用户通过 Tencent CAPTCHA</div>
+            <div class="flow-step"><span class="num">2</span>bm-main XHR 拦截 ticket</div>
+            <div class="flow-step"><span class="num">3</span>postMessage → bm-capture</div>
+            <div class="flow-step"><span class="num">4</span>写入 local:ticketPool（TTL 5min）</div>
+          </div>
+          <div class="flow-card">
+            <h4>🛒 秒杀开火链路</h4>
+            <div class="flow-step"><span class="num">1</span>用户点击 FIRE / 自动触发</div>
+            <div class="flow-step"><span class="num">2</span>bm-capture 读取 ticket + auth</div>
+            <div class="flow-step"><span class="num">3</span>同源 fetch /api/biz/pay/preview</div>
+            <div class="flow-step"><span class="num">4</span>成功后写入 local:paymentState</div>
+          </div>
+          <div class="flow-card">
+            <h4>⏰ 提醒调度链路</h4>
+            <div class="flow-step"><span class="num">1</span>options 保存 saleTimeConfig</div>
+            <div class="flow-step"><span class="num">2</span>background 计算下次秒杀时间</div>
+            <div class="flow-step"><span class="num">3</span>chrome.alarms 注册提醒点</div>
+            <div class="flow-step"><span class="num">4</span>触发 notifications + badge</div>
+          </div>
+          <div class="flow-card">
+            <h4>🎯 产品矩阵链路</h4>
+            <div class="flow-step"><span class="num">1</span>batch-preview API 返回 9 产品</div>
+            <div class="flow-step"><span class="num">2</span>buildProductMatrix 分组 3×3</div>
+            <div class="flow-step"><span class="num">3</span>覆盖层渲染可选产品卡片</div>
+            <div class="flow-step"><span class="num">4</span>选择状态同步到 storage</div>
+          </div>
+          <div class="flow-card">
+            <h4>🕐 NTP 校时链路</h4>
+            <div class="flow-step"><span class="num">1</span>probe batch-preview 8 次</div>
+            <div class="flow-step"><span class="num">2</span>取最佳 60% RTT 中位数</div>
+            <div class="flow-step"><span class="num">3</span>计算 clockOffsetMs + latencyMs</div>
+            <div class="flow-step"><span class="num">4</span>自动开火按服务器时间触发</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- File Index -->
+      <section class="section" id="files">
+        <div class="section-header">
+          <h2>关键文件索引</h2>
+          <span class="tag">按目录分组</span>
+        </div>
+        <div class="card">
+          <div class="file-list">
+            <div class="file-item">
+              <div class="file-path">entrypoints/background.ts</div>
+              <div class="file-desc">Service Worker：alarms、badge、通知、批量预览缓存</div>
+            </div>
+            <div class="file-item">
+              <div class="file-path">entrypoints/bm-capture.content.ts</div>
+              <div class="file-desc">ISOLATED world content script：auth 抓取、ticket 中继、开火执行</div>
+            </div>
+            <div class="file-item">
+              <div class="file-path">entrypoints/popup/App.svelte</div>
+              <div class="file-desc">Popup 入口：DEV/PROD 模式切换</div>
+            </div>
+            <div class="file-item">
+              <div class="file-path">entrypoints/popup/components/DevContent.svelte</div>
+              <div class="file-desc">DEV 模式 API 调试面板</div>
+            </div>
+            <div class="file-item">
+              <div class="file-path">entrypoints/options/GeneralPage.svelte</div>
+              <div class="file-desc">选项页：秒杀时间、验证码批量限制、DEV 模式</div>
+            </div>
+            <div class="file-item">
+              <div class="file-path">src/bm-main/01-utils.js ~ 09-fire-viz.js</div>
+              <div class="file-desc">MAIN world 注入脚本源文件（拼接生成 public/bm-main.js）</div>
+            </div>
+            <div class="file-item">
+              <div class="file-path">lib/api/client.ts</div>
+              <div class="file-desc">同源请求代理：executeScript + MAIN world fetch</div>
+            </div>
+            <div class="file-item">
+              <div class="file-path">lib/api/auth-store.ts</div>
+              <div class="file-desc">AuthHeaders CRUD + captureFromTab</div>
+            </div>
+            <div class="file-item">
+              <div class="file-path">lib/api/ticket-store.ts</div>
+              <div class="file-desc">Ticket 池：去重、FIFO、TTL 自动裁剪</div>
+            </div>
+            <div class="file-item">
+              <div class="file-path">lib/api/fire-plan.ts</div>
+              <div class="file-desc">自动开火计划：initial 并发 + follow-up 随机时序</div>
+            </div>
+            <div class="file-item">
+              <div class="file-path">lib/api/runtime-calibration.ts</div>
+              <div class="file-desc">NTP 式延迟探测与钟差校准</div>
+            </div>
+            <div class="file-item">
+              <div class="file-path">lib/settings/sale-time.ts</div>
+              <div class="file-desc">秒杀时间配置与闹钟计划</div>
+            </div>
+            <div class="file-item">
+              <div class="file-path">scripts/build-overlay.js</div>
+              <div class="file-desc">拼接 src/bm-main/*.js 生成 public/bm-main.js</div>
+            </div>
+            <div class="file-item">
+              <div class="file-path">scripts/regression-target-products.js</div>
+              <div class="file-desc">L5 静态回归门</div>
+            </div>
+            <div class="file-item">
+              <div class="file-path">scripts/regression-target-products-e2e.js</div>
+              <div class="file-desc">L6 Playwright E2E 回归门</div>
+            </div>
+            <div class="file-item">
+              <div class="file-path">docs/architecture.md</div>
+              <div class="file-desc">架构与原理文档</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Links -->
+      <section class="section" id="links">
+        <div class="section-header">
+          <h2>快速链接</h2>
+          <span class="tag">文档与配置</span>
+        </div>
+        <div class="quick-links">
+          <a href="../../README.md" target="_blank">📘 README.md</a>
+          <a href="../../docs/architecture.md" target="_blank">🏗️ architecture.md</a>
+          <a href="../../docs/testing.md" target="_blank">🧪 testing.md</a>
+          <a href="../../docs/bigmodel-batch-preview-api.md" target="_blank">🔍 API 探查报告</a>
+          <a href="../../docs/postmortem-batch-preview-empty-body-2026-05-30.md" target="_blank">🚨 故障复盘</a>
+          <a href="../../package.json" target="_blank">📦 package.json</a>
+          <a href="../../wxt.config.ts" target="_blank">⚙️ wxt.config.ts</a>
+          <a href="../../vitest.config.ts" target="_blank">🧪 vitest.config.ts</a>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const layers = [
+      {
+        id: 'product',
+        lid: 'L0',
+        name: '产品目标层',
+        short: 'Product Goals',
+        color: '#818cf8',
+      },
+      {
+        id: 'platform',
+        lid: 'L1',
+        name: '浏览器平台层',
+        short: 'Chrome MV3',
+        color: '#34d399',
+      },
+      {
+        id: 'entrypoints',
+        lid: 'L2',
+        name: '扩展入口层',
+        short: 'Entrypoints',
+        color: '#f472b6',
+      },
+      {
+        id: 'mainworld',
+        lid: 'L3',
+        name: '页面注入层',
+        short: 'MAIN World',
+        color: '#fbbf24',
+      },
+      {
+        id: 'business',
+        lid: 'L4',
+        name: '业务逻辑层',
+        short: 'Business Logic',
+        color: '#60a5fa',
+      },
+      {
+        id: 'storage',
+        lid: 'L5',
+        name: '数据持久化层',
+        short: 'Storage',
+        color: '#a78bfa',
+      },
+      {
+        id: 'quality',
+        lid: 'L6',
+        name: '构建与质量层',
+        short: 'Build & Quality',
+        color: '#f87171',
+      },
+      {
+        id: 'docs',
+        lid: 'L7',
+        name: '文档与知识层',
+        short: 'Documentation',
+        color: '#2dd4bf',
+      },
+    ];
+
+    const dimensions = [
+      {
+        id: 'responsibility',
+        name: '职责',
+        short: 'What',
+        color: '#818cf8',
+        desc: '该层承担什么核心职责',
+      },
+      {
+        id: 'files',
+        name: '关键文件',
+        short: 'Where',
+        color: '#34d399',
+        desc: '关键源码与配置文件位置',
+      },
+      {
+        id: 'dataflow',
+        name: '数据流',
+        short: 'How',
+        color: '#f472b6',
+        desc: '数据如何流入、流出、与其他层协作',
+      },
+      {
+        id: 'design',
+        name: '设计决策',
+        short: 'Why',
+        color: '#fbbf24',
+        desc: '关键设计约束、取舍与原因',
+      },
+      {
+        id: 'testing',
+        name: '测试覆盖',
+        short: 'Test',
+        color: '#60a5fa',
+        desc: '该层如何被测试验证',
+      },
+      {
+        id: 'risk',
+        name: '风险与案例',
+        short: 'Risk',
+        color: '#f87171',
+        desc: '常见故障、踩坑与复盘',
+      },
+    ];
+
+    const matrixData = {
+      'product-responsibility': {
+        title: '辅助用户完成 bigmodel.cn 限量套餐秒杀',
+        body: `
+          <p>智谱 AI（bigmodel.cn）定期在固定时间点开放限量套餐购买。扩展的核心目标是：<strong>让用户在秒杀开始前做好准备、在秒杀瞬间以最快速度完成下单</strong>。</p>
+          <ul>
+            <li>功能按需求编号 R1–R4 组织：通知、验证码、页面提醒、角标。</li>
+            <li>附加 DEV/PROD 双模式：开发调试 vs 终端用户操作。</li>
+            <li>所有功能围绕“时间窗口极短、对手众多、服务端有防护”这一场景设计。</li>
+          </ul>
+        `,
+      },
+      'product-files': {
+        title: 'README.md / docs / package.json',
+        body: `
+          <p>项目目标与功能定义分布在以下位置：</p>
+          <ul>
+            <li><code>README.md</code>：用户视角的功能概览与快速开始。</li>
+            <li><code>docs/architecture.md</code>：产品目标与需求映射（R1–R4）。</li>
+            <li><code>package.json</code>：版本、脚本、依赖。</li>
+          </ul>
+        `,
+      },
+      'product-dataflow': {
+        title: '用户需求 → 功能模块映射',
+        body: `
+          <p>每个产品需求对应一个或多个技术层：</p>
+          <ul>
+            <li>R1 通知提醒 → background service worker + chrome.alarms</li>
+            <li>R2 验证码预取 → bm-main + bm-capture + ticketStore</li>
+            <li>R3 页面内提醒 → bm-capture 在 bigmodel.cn 注入顶部横幅</li>
+            <li>R4 角标倒计时 → background + chrome.action.setBadge</li>
+          </ul>
+        `,
+      },
+      'product-design': {
+        title: '成功率优先、社区驱动的设计哲学',
+        body: `
+          <p>扩展 disclaim 中明确说明：实测成功率约 60%，受网络、防护、验证码策略影响。设计上接受“不完美但持续迭代”：</p>
+          <ul>
+            <li>鼓励 fork 并根据实际调整策略。</li>
+            <li>通过模块化、测试、回归门降低迭代风险。</li>
+            <li>社区贡献是持续有效的关键。</li>
+          </ul>
+        `,
+      },
+      'product-testing': {
+        title: '无直接测试，由端到端构建验证',
+        body: `
+          <p>产品目标本身没有单元测试，但 <code>pnpm build</code> 会跑完整链路：</p>
+          <ul>
+            <li>构建 overlay</li>
+            <li>WXT 打包</li>
+            <li>L5 静态回归 + L6 Playwright E2E</li>
+          </ul>
+        `,
+      },
+      'product-risk': {
+        title: '防护策略升级导致扩展失效',
+        body: `
+          <p>主要风险来自外部：bigmodel.cn 的防护机制不定期更新，某些版本可能在某个时间点失效。README 明确提示用户自行 fork 调整。</p>
+        `,
+      },
+
+      'platform-responsibility': {
+        title: '提供扩展运行的沙箱与 API',
+        body: `
+          <p>Chrome Manifest V3 平台提供扩展运行的基础能力：</p>
+          <ul>
+            <li>Service Worker 后台执行环境（非持久化）。</li>
+            <li>Content Script 两种 world：ISOLATED 与 MAIN。</li>
+            <li>跨组件通信：chrome.runtime.sendMessage、chrome.storage、window.postMessage。</li>
+            <li>权限模型：permissions、host_permissions、web_accessible_resources。</li>
+          </ul>
+        `,
+      },
+      'platform-files': {
+        title: 'wxt.config.ts / manifest',
+        body: `
+          <p>平台配置集中在 <code>wxt.config.ts</code>：</p>
+          <ul>
+            <li>模块：<code>@wxt-dev/module-svelte</code></li>
+            <li>权限：storage, tabs, scripting, alarms, notifications</li>
+            <li>host_permissions：<code>*://*.bigmodel.cn/*</code></li>
+            <li>web_accessible_resources：public/bm-main.js</li>
+          </ul>
+        `,
+      },
+      'platform-dataflow': {
+        title: '跨 world / 跨上下文通信',
+        body: `
+          <p>数据在三个主要上下文中流转：</p>
+          <ul>
+            <li><strong>Service Worker</strong>：alarms 触发 → notifications / badge。</li>
+            <li><strong>ISOLATED world</strong>：可访问 chrome.* API，通过 postMessage 与 MAIN world 通信。</li>
+            <li><strong>MAIN world</strong>：可访问页面 JS 变量、XHR、cookie/localStorage，通过 postMessage 与 ISOLATED world 通信。</li>
+          </ul>
+        `,
+      },
+      'platform-design': {
+        title: '为什么必须用 MAIN world + executeScript',
+        body: `
+          <p>bigmodel.cn 服务端会拒绝 <code>chrome-extension://</code> origin 的请求，返回空 body。唯一能以 <code>https://bigmodel.cn</code> origin 发请求的方式是在页面 MAIN world 中执行 fetch。</p>
+          <ul>
+            <li>Content script（ISOLATED world）直接 fetch 同样会被拒绝。</li>
+            <li>Background service worker fetch 的 origin 是 chrome-extension://。</li>
+            <li><code>chrome.scripting.executeScript({ world: 'MAIN', ... })</code> 是 MV3 标准方案。</li>
+          </ul>
+        `,
+      },
+      'platform-testing': {
+        title: '通过 WxtVitest 与 fakeBrowser 模拟',
+        body: `
+          <p><code>WxtVitest()</code> 插件自动 polyfill browser API 并提供 <code>fakeBrowser</code>。测试在 happy-dom 环境运行，每个测试前调用 <code>fakeBrowser.reset()</code>。</p>
+        `,
+      },
+      'platform-risk': {
+        title: 'SW 生命周期与 alarms 注册位置',
+        body: `
+          <p>关键约束：<code>chrome.alarms.onAlarm.addListener</code> 必须在顶层注册，不能在 async 函数内，否则 SW 被唤醒后会错过事件。background.ts 中严格遵守。</p>
+        `,
+      },
+
+      'entrypoints-responsibility': {
+        title: '扩展四个入口点：后台、内容脚本、弹窗、选项页',
+        body: `
+          <p><code>entrypoints/</code> 中每个文件/目录对应一个 WXT 入口：</p>
+          <ul>
+            <li><strong>background.ts</strong>：R1 通知 + R4 角标，调度 reminders。</li>
+            <li><strong>bm-capture.content.ts</strong>：R2 验证码中继 + R3 页面提醒 + auth 捕获 + 开火执行。</li>
+            <li><strong>popup/</strong>：用户主界面，DEV/PROD 双模式。</li>
+            <li><strong>options/</strong>：扩展选项页，配置秒杀时间与验证码限制。</li>
+          </ul>
+        `,
+      },
+      'entrypoints-files': {
+        title: 'entrypoints/ 目录',
+        body: `
+          <p>关键入口文件：</p>
+          <ul>
+            <li><code>entrypoints/background.ts</code></li>
+            <li><code>entrypoints/bm-capture.content.ts</code></li>
+            <li><code>entrypoints/popup/App.svelte</code> + components/</li>
+            <li><code>entrypoints/options/App.svelte</code> + GeneralPage.svelte</li>
+          </ul>
+        `,
+      },
+      'entrypoints-dataflow': {
+        title: '入口点之间的消息与存储协作',
+        body: `
+          <ul>
+            <li>options 保存 saleTimeConfig → 发送 SALE_TIME_UPDATED → background 重新注册 alarms。</li>
+            <li>popup 打开 → DevContent 调用 captureFromTab 获取最新 auth。</li>
+            <li>bm-capture 监听 MAIN world 的 postMessage → 写入 storage → 更新 popup 与覆盖层。</li>
+          </ul>
+        `,
+      },
+      'entrypoints-design': {
+        title: '为什么 content script 分 ISOLATED + MAIN',
+        body: `
+          <p>ISOLATED world 能安全使用 chrome.* API 和 WXT storage，但无法访问页面 JS 变量；MAIN world 能访问页面所有资源，但无法直接调用 chrome.* API。两者通过 <code>window.postMessage</code> 配对使用，兼顾安全与能力。</p>
+        `,
+      },
+      'entrypoints-testing': {
+        title: '组件测试 + 集成测试',
+        body: `
+          <ul>
+            <li>Svelte 组件：@testing-library/svelte + happy-dom，文件名必须含 <code>.svelte.test.ts</code>。</li>
+            <li>background 纯逻辑：测试文件中复制 getNextSaleTime 时区算法。</li>
+            <li>集成测试：vi.mock chrome.tabs/scripting 验证 captureFromTab 链路。</li>
+          </ul>
+        `,
+      },
+      'entrypoints-risk': {
+        title: 'popup 缓存 JWT 导致空响应',
+        body: `
+          <p>故障复盘记录：popup 打开时优先使用缓存 auth，若 bigmodel.cn JWT 已轮换则请求返回 content-length: 0。修复：每次 popup 打开都先 captureFromTab，缓存仅作无 tab 时的兜底。</p>
+        `,
+      },
+
+      'mainworld-responsibility': {
+        title: '在 bigmodel.cn 页面内执行同源逻辑与 UI',
+        body: `
+          <p><code>public/bm-main.js</code> 由 <code>src/bm-main/*.js</code> 拼接生成，注入到页面 MAIN world：</p>
+          <ul>
+            <li>拦截原生 XHR，捕获 batch-preview 产品列表与 CAPTCHA ticket。</li>
+            <li>渲染秒杀覆盖层 UI：产品选择、验证码池、FIRE 按钮、支付状态。</li>
+            <li>自动开火调度：基于 NTP 校准的时间触发。</li>
+            <li>开火可视化：3×3 产品矩阵展示每发请求结果。</li>
+          </ul>
+        `,
+      },
+      'mainworld-files': {
+        title: 'src/bm-main/*.js + public/bm-main.js',
+        body: `
+          <p>模块化源文件（按依赖顺序拼接）：</p>
+          <ul>
+            <li><code>00-css.js</code>：覆盖层 CSS</li>
+            <li><code>01-utils.js</code>：金额格式化、计费周期推导</li>
+            <li><code>02-state.js</code>：全局状态、运行时校准、消息封装</li>
+            <li><code>03-xhr.js</code>：XHR 拦截器</li>
+            <li><code>04-captcha.js</code>：腾讯验证码批量获取</li>
+            <li><code>05-product.js</code>：产品矩阵构建与 UI</li>
+            <li><code>07-auto-fire.js</code>：自动开火调度</li>
+            <li><code>08-overlay.js</code>：主覆盖层注入与交互</li>
+            <li><code>09-fire-viz.js</code>：独立开火可视化覆盖层</li>
+          </ul>
+        `,
+      },
+      'mainworld-dataflow': {
+        title: 'MAIN world 是 ISOLATED world 的“能力扩展”',
+        body: `
+          <ul>
+            <li>MAIN world 拦截到 ticket → postMessage → ISOLATED world → storage。</li>
+            <li>MAIN world 请求 batch-preview（同源）→ 更新产品矩阵 → UI。</li>
+            <li>用户点击 FIRE → postMessage → ISOLATED world 执行实际 fetch。</li>
+          </ul>
+        `,
+      },
+      'mainworld-design': {
+        title: '为什么 bm-main.js 是静态文件而非编译产物',
+        body: `
+          <p>executeScript 的 func 参数可以注入函数，但复杂 UI 逻辑（拖拽覆盖层、商品选择）用字面量函数传递不现实。作为 web_accessible_resources 静态文件通过 <code>&lt;script&gt;</code> 注入，可自由使用任意 DOM API，不受 args 序列化限制。</p>
+        `,
+      },
+      'mainworld-testing': {
+        title: 'vm 沙箱测试原始源文件',
+        body: `
+          <p><code>tests/unit/bm-main/_harness.ts</code> 提供 <code>loadBmMainModules()</code>，按依赖顺序用 Node vm 加载原始 JS。测试不覆盖生成的 <code>public/bm-main.js</code>。</p>
+        `,
+      },
+      'mainworld-risk': {
+        title: '模块加载顺序依赖',
+        body: `
+          <p>源文件按数字顺序设计，后者依赖前者的全局变量。加载时必须按顺序包含所有依赖文件，否则出现 <code>ReferenceError: _planOrder is not defined</code>。</p>
+        `,
+      },
+
+      'business-responsibility': {
+        title: 'API 客户端、状态管理、开火策略',
+        body: `
+          <p><code>lib/api/</code> 与 <code>lib/settings/</code> 承载业务逻辑：</p>
+          <ul>
+            <li><strong>API 客户端</strong>：catalog、client、auth-store、ticket-store、payment-store、fire-plan、runtime-calibration。</li>
+            <li><strong>设置</strong>：dev 模式、秒杀时间、captcha 批量限制。</li>
+          </ul>
+        `,
+      },
+      'business-files': {
+        title: 'lib/api/ + lib/settings/',
+        body: `
+          <ul>
+            <li><code>lib/api/types.ts</code>：共享类型与 storage key 常量。</li>
+            <li><code>lib/api/catalog.ts</code>：7 个 bigmodel API 端点目录。</li>
+            <li><code>lib/api/client.ts</code>：executeScript 同源请求代理。</li>
+            <li><code>lib/api/auth-store.ts</code> / <code>ticket-store.ts</code> / <code>payment-store.ts</code></li>
+            <li><code>lib/api/fire-plan.ts</code> / <code>runtime-calibration.ts</code></li>
+            <li><code>lib/settings/dev.ts</code> / <code>sale-time.ts</code> / <code>captcha.ts</code></li>
+          </ul>
+        `,
+      },
+      'business-dataflow': {
+        title: '业务状态被入口点共享',
+        body: `
+          <ul>
+            <li>auth-store：读取/写入 <code>local:authHeaders</code>，popup 与 bm-capture 共享。</li>
+            <li>ticket-store：维护 ticket 池，过期自动裁剪，开火时取出。</li>
+            <li>payment-store：记录下单结果，popup 轮询支付状态。</li>
+            <li>fire-plan：将 tickets 与 selectedIds 编排为 initial + follow-up 射击队列。</li>
+          </ul>
+        `,
+      },
+      'business-design': {
+        title: '为什么 Ticket 池需要 TTL',
+        body: `
+          <p>Tencent CAPTCHA ticket 有效期约 5 分钟，超期返回错误码 8。TTL 自动淘汰确保池中始终只有有效 ticket。fire-plan 还会按过期紧迫度排序，优先使用即将过期的 ticket。</p>
+        `,
+      },
+      'business-testing': {
+        title: 'L1 纯逻辑 + L2 存储单元测试',
+        body: `
+          <ul>
+            <li>纯逻辑：catalog、fire-plan、runtime-calibration、buildProductMatrix。</li>
+            <li>存储层：auth/payment/ticket/sale-time store，fakeBrowser 自动生效。</li>
+          </ul>
+        `,
+      },
+      'business-risk': {
+        title: 'JWT 轮换与缓存失效',
+        body: `
+          <p>bigmodel.cn JWT 会在重新登录后轮换。任何 cache-first auth 都可能导致请求失败。修复策略：popup 每次打开优先 captureFromTab，实时优先于缓存。</p>
+        `,
+      },
+
+      'storage-responsibility': {
+        title: '所有组件共享状态',
+        body: `
+          <p>通过 <code>chrome.storage.local</code>（WXT <code>storage</code>）在 background、content script、popup、options 之间共享数据。所有 key 以 <code>local:</code> 为前缀。</p>
+        `,
+      },
+      'storage-files': {
+        title: 'WXT storage API',
+        body: `
+          <p>存储操作集中在各 store 模块，使用 <code>import { storage } from '#imports'</code>。</p>
+        `,
+      },
+      'storage-dataflow': {
+        title: '关键 storage key 与读写者',
+        body: `
+          <table style="width:100%; border-collapse: collapse; font-size: 13px; margin-top: 8px;">
+            <tr style="border-bottom: 1px solid var(--border);">
+              <th style="text-align:left; padding:8px;">Key</th>
+              <th style="text-align:left; padding:8px;">写入者</th>
+              <th style="text-align:left; padding:8px;">读取者</th>
+            </tr>
+            <tr><td style="padding:8px;"><code>local:authHeaders</code></td><td style="padding:8px;">bm-capture, authStore</td><td style="padding:8px;">popup, bm-capture</td></tr>
+            <tr><td style="padding:8px;"><code>local:ticketPool</code></td><td style="padding:8px;">bm-capture</td><td style="padding:8px;">bm-capture</td></tr>
+            <tr><td style="padding:8px;"><code>local:paymentState</code></td><td style="padding:8px;">bm-capture</td><td style="padding:8px;">popup ProdContent</td></tr>
+            <tr><td style="padding:8px;"><code>local:saleTimeConfig</code></td><td style="padding:8px;">options</td><td style="padding:8px;">background, bm-capture</td></tr>
+            <tr><td style="padding:8px;"><code>local:devMode</code></td><td style="padding:8px;">popup Topbar / options</td><td style="padding:8px;">popup App</td></tr>
+            <tr><td style="padding:8px;"><code>local:selectedProducts</code></td><td style="padding:8px;">bm-main overlay</td><td style="padding:8px;">bm-capture</td></tr>
+          </table>
+        `,
+      },
+      'storage-design': {
+        title: 'WXT storage 命名约定',
+        body: `
+          <p><code>storage.setItem('local:foo', v)</code> 等价于 <code>chrome.storage.local.set({ 'local:foo': v })</code>——key 是字面量，不做前缀 strip。因此如果其他代码直接操作 <code>chrome.storage.local.set({ authHeaders: x })</code>，会产生两个独立 key，造成混淆（故障复盘中的真实踩坑）。</p>
+        `,
+      },
+      'storage-testing': {
+        title: 'fakeBrowser 覆盖存储层',
+        body: `
+          <p><code>WxtVitest()</code> 自动将 <code>wxt/browser</code> 替换为 fakeBrowser 内存实现，每个测试前 reset，保证隔离。</p>
+        `,
+      },
+      'storage-risk': {
+        title: '双 key 的 JWT 存储竞争',
+        body: `
+          <p>复盘案例：chrome.storage.local 里同时存在 <code>authHeaders</code>（旧/失效 JWT）和 <code>local:authHeaders</code>（新/有效 JWT）。因 WXT key 是字面量，旧 key 未被覆盖，导致 popup 读取到失效 token。</p>
+        `,
+      },
+
+      'quality-responsibility': {
+        title: '构建产物并保证核心功能不回归',
+        body: `
+          <p>构建与质量层负责：</p>
+          <ul>
+            <li>生成 <code>public/bm-main.js</code>。</li>
+            <li>WXT 打包扩展到 <code>output/chrome-mv3/</code>。</li>
+            <li>运行 L5/L6 回归门。</li>
+            <li>准备最终 zip 包。</li>
+          </ul>
+        `,
+      },
+      'quality-files': {
+        title: 'scripts/ + tests/ + package.json',
+        body: `
+          <ul>
+            <li><code>scripts/build-overlay.js</code>：拼接 bm-main 源文件。</li>
+            <li><code>scripts/regression-target-products.js</code>：L5 静态回归。</li>
+            <li><code>scripts/regression-target-products-e2e.js</code>：L6 Playwright。</li>
+            <li><code>scripts/zip-prepare.js</code>：zip 后处理。</li>
+            <li><code>tests/</code>：L1–L4 测试。</li>
+            <li><code>vitest.config.ts</code>：测试配置。</li>
+          </ul>
+        `,
+      },
+      'quality-dataflow': {
+        title: '构建流水线',
+        body: `
+          <pre style="font-family: var(--mono); font-size: 12px; color: var(--text-muted); background: rgba(0,0,0,0.2); padding: 12px; border-radius: 8px; margin-top: 8px;">
+pnpm build =
+  build-overlay.js
+  && wxt build
+  && regression-target-products.js
+  && regression-target-products-e2e.js
+          </pre>
+        `,
+      },
+      'quality-design': {
+        title: '分层测试策略',
+        body: `
+          <p>尽量在最低层发现问题：</p>
+          <ul>
+            <li>L1 纯逻辑、L2 存储测试快且不依赖环境。</li>
+            <li>L4 组件测试仅在需要真实 DOM 交互时启用。</li>
+            <li>L5/L6 E2E 是最终安全网，不是主要测试手段。</li>
+          </ul>
+        `,
+      },
+      'quality-testing': {
+        title: '6 层测试模型',
+        body: `
+          <ul>
+            <li>L1：纯逻辑单元测试（Vitest 无环境）</li>
+            <li>L2：WXT 存储单元测试（fakeBrowser）</li>
+            <li>L3：bm-main JS 模块测试（vm 沙箱）</li>
+            <li>L4：Svelte 组件测试（@testing-library/svelte）</li>
+            <li>L5：静态构建产物回归（Node.js）</li>
+            <li>L6：Playwright E2E 运行时回归</li>
+          </ul>
+        `,
+      },
+      'quality-risk': {
+        title: 'E2E 门依赖真实 Chrome 与网络',
+        body: `
+          <p>L6 回归门需要本地 Chrome 可执行文件，并访问 bigmodel.cn。可通过环境变量配置路径与 headless 模式。CI 环境中可能需要额外配置。</p>
+        `,
+      },
+
+      'docs-responsibility': {
+        title: '记录架构、API、测试与故障知识',
+        body: `
+          <p><code>docs/</code> 目录保存项目知识资产，帮助新成员理解设计决策与踩坑经验。</p>
+        `,
+      },
+      'docs-files': {
+        title: 'docs/ 目录',
+        body: `
+          <ul>
+            <li><code>docs/architecture.md</code>：整体架构、入口点、核心机制、设计决策。</li>
+            <li><code>docs/testing.md</code>：测试分层、工具链、写法和反模式。</li>
+            <li><code>docs/bigmodel-batch-preview-api.md</code>：batch-preview 接口探查报告。</li>
+            <li><code>docs/postmortem-batch-preview-empty-body-2026-05-30.md</code>：JWT 竞态故障复盘。</li>
+          </ul>
+        `,
+      },
+      'docs-dataflow': {
+        title: '文档作为决策上下文',
+        body: `
+          <p>文档不是一次性产物，而是随代码演化：</p>
+          <ul>
+            <li>新增设计决策时补充 architecture.md。</li>
+            <li>发现故障后写 postmortem。</li>
+            <li>测试策略变化时更新 testing.md。</li>
+          </ul>
+        `,
+      },
+      'docs-design': {
+        title: '为什么需要故障复盘文档',
+        body: `
+          <p>postmortem 不仅记录修复，更记录“误区”与“诊断顺序”。例如本次复盘强调：auth 层面的 bug 不会暴露在传输层，应先验证传递了什么，再验证传输是否成功。</p>
+        `,
+      },
+      'docs-testing': {
+        title: '文档本身无测试，但指导测试策略',
+        body: `
+          <p>testing.md 定义了 L1–L6 测试模型、命名约定、反模式。新加入的测试应遵循这些规范。</p>
+        `,
+      },
+      'docs-risk': {
+        title: '文档与代码不同步',
+        body: `
+          <p>风险在于文档描述与实际代码脱节。建议重大变更后同步更新 docs/ 与 README，必要时将架构图等生成到本 guide 中。</p>
+        `,
+      },
+    };
+
+    let activeLayer = layers[0].id;
+    let activeDim = null;
+
+    function renderLayerNav() {
+      const nav = document.getElementById('layer-nav');
+      nav.innerHTML = layers.map(l => `
+        <a class="nav-item" href="#matrix" data-layer="${l.id}">
+          <span class="layer-id" style="color: ${l.color}">${l.lid}</span>
+          ${l.name}
+        </a>
+      `).join('');
+
+      nav.querySelectorAll('.nav-item').forEach(el => {
+        el.addEventListener('click', (e) => {
+          e.preventDefault();
+          activeLayer = el.dataset.layer;
+          renderMatrix();
+          document.getElementById('matrix').scrollIntoView({ behavior: 'smooth' });
+        });
+      });
+    }
+
+    function renderDimControls() {
+      const controls = document.getElementById('dim-controls');
+      controls.innerHTML = [
+        { id: null, name: '全部维度' },
+        ...dimensions,
+      ].map(d => `
+        <button class="dim-btn ${activeDim === d.id ? 'active' : ''}" data-dim="${d.id ?? ''}">
+          ${d.name}
+        </button>
+      `).join('');
+
+      controls.querySelectorAll('.dim-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          activeDim = btn.dataset.dim || null;
+          renderMatrix();
+          renderDimControls();
+        });
+      });
+    }
+
+    function renderMatrix() {
+      const table = document.getElementById('matrix-table');
+      const visibleDims = activeDim ? dimensions.filter(d => d.id === activeDim) : dimensions;
+
+      let html = `
+        <div class="matrix-header">层级 \\ 维度</div>
+        ${visibleDims.map(d => `<div class="matrix-header">${d.name}</div>`).join('')}
+      `;
+
+      layers.forEach(layer => {
+        html += `
+          <div class="matrix-layer ${layer.id === activeLayer ? 'active' : ''}" data-layer="${layer.id}">
+            <span class="layer-id" style="color: ${layer.color}">${layer.lid}</span>
+            ${layer.name}
+          </div>
+        `;
+        visibleDims.forEach(dim => {
+          const key = `${layer.id}-${dim.id}`;
+          const data = matrixData[key];
+          const preview = data ? stripHtml(data.body).slice(0, 80) + '…' : '—';
+          html += `
+            <div class="matrix-cell ${layer.id === activeLayer ? 'active' : ''}" data-key="${key}">
+              <div class="cell-title">
+                <span class="dim-dot" style="background: ${dim.color}"></span>
+                ${dim.name}
+              </div>
+              <div class="cell-preview">${preview}</div>
+            </div>
+          `;
+        });
+      });
+
+      table.innerHTML = html;
+
+      table.querySelectorAll('.matrix-layer').forEach(el => {
+        el.addEventListener('click', () => {
+          activeLayer = el.dataset.layer;
+          renderMatrix();
+        });
+      });
+
+      table.querySelectorAll('.matrix-cell').forEach(el => {
+        el.addEventListener('click', () => {
+          showDetail(el.dataset.key);
+        });
+      });
+    }
+
+    function showDetail(key) {
+      const data = matrixData[key];
+      if (!data) return;
+
+      const [layerId, dimId] = key.split('-');
+      const layer = layers.find(l => l.id === layerId);
+      const dim = dimensions.find(d => d.id === dimId);
+
+      document.getElementById('detail-title').textContent = data.title;
+      document.getElementById('detail-layer-badge').textContent = layer.lid + ' ' + layer.name;
+      document.getElementById('detail-dim-badge').textContent = dim.name;
+      document.getElementById('detail-body').innerHTML = data.body;
+      document.getElementById('detail-panel').classList.add('open');
+    }
+
+    function stripHtml(html) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      return tmp.textContent || tmp.innerText || '';
+    }
+
+    function initNav() {
+      const navItems = document.querySelectorAll('.nav-list .nav-item[data-section]');
+      const sections = document.querySelectorAll('section[id]');
+
+      window.addEventListener('scroll', () => {
+        let current = '';
+        sections.forEach(section => {
+          const rect = section.getBoundingClientRect();
+          if (rect.top <= 120) current = section.id;
+        });
+
+        navItems.forEach(item => {
+          item.classList.toggle('active', item.dataset.section === current);
+        });
+      });
+    }
+
+    // Initialize
+    renderLayerNav();
+    renderDimControls();
+    renderMatrix();
+    initNav();
+  </script>
+</body>
+</html>

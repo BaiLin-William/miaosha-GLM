@@ -1,21 +1,29 @@
-// ── 09-fire-viz.js ── Independent Fire Visualization Overlay (Design D + C)
-// Opens automatically on FIRE_BATCH_START (auto or manual fire trigger).
-// Completely separate from the existing dashboard overlay (#__bm_overlay).
-// Reads _productMatrix from 02-state.js (same IIFE scope).
+// ── 09-fire-viz.js ── Fire Matrix: Mode + Strategy process visualizer
+// Opens automatically on FIRE_BATCH_START.
 
-var _fv_plans   = ['Lite', 'Pro', 'Max'];
-var _fv_bkeys   = ['monthly', 'quarterly', 'yearly'];
-var _fv_blabels = ['月付', '季付', '年付'];
-var _fv_cells   = {};        // "row_col" → DOM cell element
-var _fv_ppos    = {};        // productId → { row, col, name, billing }
-var _fv_logEl   = null;
-var _fv_cursor  = null;
-var _fv_autoScr = true;
-var _fv_lineNo  = 0;
-var _fv_counts  = { s: 0, b: 0, e: 0, d: 0 };
-var _fv_startMs = 0;
-var _fv_total   = 0;
-var _fv_done    = 0;
+var _fv_logEl    = null;
+var _fv_cursor   = null;
+var _fv_autoScr  = true;
+var _fv_lineNo   = 0;
+var _fv_counts   = { success: 0, busy: 0, soldout: 0, error: 0, neterr: 0 };
+var _fv_startMs  = 0;
+var _fv_total    = 0;
+var _fv_done     = 0;
+var _fv_logLines = [];
+var _fv_meta     = null;
+var _fv_dotEls   = {};
+var _fv_rowEls    = {};
+var _fv_eventRows = [];
+var _fv_shotsData = [];
+var _fv_backoffMs = 0;
+
+var _FV_OUTCOME = {
+  success: { user: '成功', dev: 'ORDER', color: '#059669', icon: '✓' },
+  busy:    { user: '限流', dev: '555 / server busy', color: '#d97706', icon: '⚠' },
+  soldout: { user: '售罄', dev: 'sold-out', color: '#64748b', icon: '⊘' },
+  error:   { user: '错误', dev: 'code=N / serverMsg', color: '#dc2626', icon: '✗' },
+  neterr:  { user: '网络错误', dev: 'net-err', color: '#dc2626', icon: '⚡' }
+};
 
 function _fv_escHtml(s) {
   return String(s)
@@ -24,142 +32,139 @@ function _fv_escHtml(s) {
     .replace(/>/g, '&gt;');
 }
 
-// Build productId → grid position map from current _productMatrix
-function _fv_buildPPos() {
-  var map = {};
-  for (var bi = 0; bi < _fv_bkeys.length; bi++) {
-    var grp = (_productMatrix && _productMatrix[_fv_bkeys[bi]]) || [];
-    for (var pi = 0; pi < grp.length; pi++) {
-      var prod = grp[pi];
-      var row = _fv_plans.indexOf(prod.planKey);
-      if (row < 0) row = Math.min(pi, _fv_plans.length - 1);
-      map[prod.id] = {
-        row: row,
-        col: bi,
-        name: prod.planKey || prod.name || '?',
-        billing: _fv_blabels[bi]
-      };
-    }
-  }
-  return map;
+function _fv_pad2(n) { return n < 10 ? '0' + n : '' + n; }
+function _fv_pad3(n) { return n < 10 ? '00' + n : n < 100 ? '0' + n : '' + n; }
+
+function _fv_formatTs(d) {
+  return _fv_pad2(d.getHours()) + ':' + _fv_pad2(d.getMinutes()) + ':' +
+         _fv_pad2(d.getSeconds()) + '.' + _fv_pad3(d.getMilliseconds());
 }
 
-// Build CSS string (injected once as <style>)
+function _fv_productName(productId) {
+  try {
+    var p = findProductById(productId);
+    if (p && p.name) return p.name;
+  } catch (e) {}
+  return productId ? productId.slice(-6) : '?';
+}
+
 function _fv_buildCSS() {
   return [
     '<style id="__bm_fv_css">',
     '@keyframes fvFlicker{0%,100%{opacity:1}50%{opacity:.65}}',
     '@keyframes fvBlink{0%,100%{opacity:1}50%{opacity:0}}',
-    '@keyframes fvPulse{0%{box-shadow:0 0 0 0 rgba(46,204,113,.55)}',
-    '100%{box-shadow:0 0 0 8px rgba(46,204,113,0)}}',
+    '@keyframes fvPulse{0%{box-shadow:0 0 0 0 rgba(16,185,129,.45)}100%{box-shadow:0 0 0 8px rgba(16,185,129,0)}}',
     '#__bm_fv *{box-sizing:border-box}',
-    '#__bm_fv ::-webkit-scrollbar{width:3px}',
-    '#__bm_fv ::-webkit-scrollbar-thumb{background:rgba(233,69,96,.35);border-radius:99px}',
+    '#__bm_fv ::-webkit-scrollbar{width:4px}',
+    '#__bm_fv ::-webkit-scrollbar-thumb{background:rgba(99,102,241,.25);border-radius:99px}',
+    '#__bm_fv .fv-row:hover{background:rgba(99,102,241,.05)}',
+    '#__bm_fv .fv-dot.pending{background:#e2e8f0;border-color:#e2e8f0}',
+    '#__bm_fv .fv-stat:hover{background:rgba(255,255,255,.6)}',
+    '@media (prefers-color-scheme:dark){',
+    '#__bm_fv{background:rgba(15,23,42,.92)!important;border-color:rgba(71,85,105,.72)!important}',
+    '#__bm_fv_h{background:rgba(99,102,241,.08)!important;border-bottom-color:rgba(71,85,105,.72)!important}',
+    '#__bm_fv_meta,#__bm_fv_st{color:#94a3b8!important}',
+    '#__bm_fv_log,#__bm_fv_timeline,#__bm_fv .fv-stat-wrap{background:rgba(2,6,23,.55)!important;border-color:rgba(71,85,105,.55)!important}',
+    '#__bm_fv .fv-row{background:rgba(255,255,255,.03)!important}',
+    '}',
     '</style>'
   ].join('');
 }
 
-// Build the overlay HTML
 function _fv_buildHTML() {
-  // Matrix grid rows
-  var gridRows = '';
-  for (var ri = 0; ri < _fv_plans.length; ri++) {
-    gridRows += '<div style="display:grid;grid-template-columns:44px 1fr 1fr 1fr;gap:3px;margin-bottom:3px">';
-    gridRows += '<div style="font-size:9px;color:#64748b;font-weight:700;display:flex;align-items:center">' +
-      _fv_plans[ri] + '</div>';
-    for (var ci = 0; ci < _fv_bkeys.length; ci++) {
-      gridRows +=
-        '<div id="__bm_fv_c_' + ri + '_' + ci + '" ' +
-        'style="height:28px;border-radius:4px;border:1px solid rgba(255,255,255,.06);' +
-        'background:rgba(255,255,255,.02);display:flex;align-items:center;justify-content:center;' +
-        'font-size:8px;font-weight:700;color:#1e293b;transition:all .25s;cursor:default;' +
-        'font-family:inherit">—</div>';
-    }
-    gridRows += '</div>';
-  }
-
   return _fv_buildCSS() + [
-    // Container
     '<div id="__bm_fv" style="',
       'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);',
-      'z-index:2147483646;width:420px;',
-      'background:#1a1a2e;',
-      'border:1px solid rgba(233,69,96,.4);',
-      'border-radius:12px;',
-      'box-shadow:0 20px 60px rgba(0,0,0,.7),0 0 30px rgba(233,69,96,.1);',
+      'z-index:2147483646;width:480px;',
+      'background:rgba(255,255,255,.97);',
+      '-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);',
+      'border:1px solid #e2e8f0;',
+      'border-radius:16px;',
+      'box-shadow:0 8px 32px rgba(0,0,0,.15);',
       "font-family:'SF Mono','Fira Code','Consolas',monospace;",
-      'overflow:hidden;user-select:none">',
+      'overflow:hidden;user-select:none;color:#1e293b;"',
+    '>',
 
-    // ── Header ──
+    // Header
     '<div id="__bm_fv_h" style="',
-      'background:linear-gradient(135deg,#16213e,#0f3460);',
+      'background:rgba(99,102,241,.06);',
       'padding:10px 14px;cursor:move;',
       'display:flex;align-items:center;gap:8px;',
-      'border-bottom:1px solid rgba(233,69,96,.2)">',
+      'border-bottom:1px solid #e2e8f0"',
+    '>',
     '<span style="font-size:15px;display:inline-block;animation:fvFlicker .5s ease-in-out infinite alternate">🔥</span>',
-    '<span style="font-size:11px;font-weight:800;color:#e94560;letter-spacing:.1em;text-transform:uppercase;flex:1">Fire Matrix</span>',
-    '<span id="__bm_fv_cnt" style="font-size:9px;color:#4a9eff;margin-right:6px">0/0 shots</span>',
+    '<span style="font-size:11px;font-weight:800;color:#6366f1;letter-spacing:.1em;text-transform:uppercase;flex:1">Fire Matrix</span>',
+    '<span id="__bm_fv_cnt" style="font-size:9px;color:#475569;margin-right:6px">0/0 shots</span>',
     '<button id="__bm_fv_cls" style="',
       'width:18px;height:18px;border-radius:50%;',
-      'border:1px solid rgba(255,255,255,.15);',
-      'background:rgba(255,255,255,.05);color:#94a3b8;',
-      'cursor:pointer;font-size:9px;display:grid;place-items:center">✕</button>',
+      'border:1px solid #e2e8f0;',
+      'background:#f8fafc;color:#64748b;',
+      'cursor:pointer;font-size:9px;display:grid;place-items:center;transition:all .15s"',
+    '>✕</button>',
     '</div>',
 
-    // ── Progress bar ──
-    '<div style="height:2px;background:rgba(255,255,255,.05)">',
-    '<div id="__bm_fv_pb" style="height:100%;width:0%;background:linear-gradient(90deg,#4a9eff,#2ecc71);transition:width .3s"></div>',
+    // Progress bar
+    '<div style="height:3px;background:#e2e8f0">',
+    '<div id="__bm_fv_pb" style="height:100%;width:0%;background:linear-gradient(90deg,#6366f1,#10b981);transition:width .3s"></div>',
     '</div>',
 
-    // ── Matrix section ──
-    '<div style="padding:12px 14px 10px">',
-    '<div style="font-size:9px;color:#4a9eff;font-weight:700;margin-bottom:8px;letter-spacing:.06em">▸ PRODUCT MATRIX</div>',
-    // Column headers
-    '<div style="display:grid;grid-template-columns:44px 1fr 1fr 1fr;gap:3px;margin-bottom:4px">',
-    '<div></div>',
-    '<div style="font-size:8px;color:#334155;text-align:center;font-weight:700">月付</div>',
-    '<div style="font-size:8px;color:#334155;text-align:center;font-weight:700">季付</div>',
-    '<div style="font-size:8px;color:#334155;text-align:center;font-weight:700">年付</div>',
-    '</div>',
-    gridRows,
+    // Meta strip
+    '<div id="__bm_fv_meta" style="padding:8px 14px;font-size:9px;color:#475569;display:flex;gap:10px;flex-wrap:wrap;border-bottom:1px solid #f1f5f9">',
+    '等待任务开始…',
     '</div>',
 
-    // ── Stats bar ──
-    '<div style="margin:0 14px 10px;padding:5px 10px;',
-      'background:rgba(255,255,255,.02);',
-      'border-radius:6px;border:1px solid rgba(255,255,255,.05);',
-      'display:flex;gap:12px;align-items:center">',
-    '<span id="__bm_fv_ss" style="font-size:9px;color:#2ecc71">✓ 0</span>',
-    '<span id="__bm_fv_sb" style="font-size:9px;color:#f39c12">⚠ 0</span>',
-    '<span id="__bm_fv_se" style="font-size:9px;color:#e74c3c">✗ 0</span>',
-    '<span id="__bm_fv_sd" style="font-size:9px;color:#64748b">⊘ 0</span>',
-    '<span style="flex:1"></span>',
-    '<span id="__bm_fv_st" style="font-size:9px;color:#334155">0ms</span>',
+    // Dot strip
+    '<div style="padding:10px 14px 6px">',
+    '<div id="__bm_fv_dots" style="display:flex;flex-wrap:wrap;gap:3px;max-height:54px;overflow-y:auto"></div>',
     '</div>',
 
-    // ── Terminal Log section ──
-    '<div style="border-top:1px solid rgba(255,255,255,.05)">',
+    // Timeline
+    '<div id="__bm_fv_timeline" style="padding:0 14px 8px;height:140px;overflow-y:auto;display:flex;flex-direction:column;gap:4px">',
+    '</div>',
+
+    // Stats strip
+    '<div class="fv-stat-wrap" style="margin:0 14px 10px;padding:6px 10px;',
+      'background:#f8fafc;',
+      'border-radius:10px;border:1px solid #e2e8f0;',
+      'display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:space-between"',
+    '>',
+    '<div class="fv-stat" id="__bm_fv_ss" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#059669;transition:background .15s">',
+      '<span>✓</span><span>成功</span><b style="min-width:14px;text-align:center">0</b>',
+    '</div>',
+    '<div class="fv-stat" id="__bm_fv_sb" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#d97706;transition:background .15s">',
+      '<span>⚠</span><span>限流</span><b style="min-width:14px;text-align:center">0</b>',
+    '</div>',
+    '<div class="fv-stat" id="__bm_fv_se" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#dc2626;transition:background .15s">',
+      '<span>✗</span><span>错误</span><b style="min-width:14px;text-align:center">0</b>',
+    '</div>',
+    '<div class="fv-stat" id="__bm_fv_sd" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#64748b;transition:background .15s">',
+      '<span>⊘</span><span>售罄</span><b style="min-width:14px;text-align:center">0</b>',
+    '</div>',
+    '<div class="fv-stat" id="__bm_fv_boff" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#7c3aed;transition:background .15s">',
+      '<span>⏱</span><span>退避</span><b style="min-width:14px;text-align:center">0ms</b>',
+    '</div>',
+    '<span id="__bm_fv_st" style="font-size:9px;color:#94a3b8;margin-left:auto">0ms</span>',
+    '</div>',
+
+    // Console
+    '<div style="border-top:1px solid #f1f5f9">',
     '<div style="display:flex;align-items:center;padding:8px 14px 4px;gap:6px">',
-    '<span style="font-size:9px;color:#4a9eff;font-weight:700;letter-spacing:.06em">▸ FIRE CONSOLE</span>',
+    '<span style="font-size:9px;color:#6366f1;font-weight:700;letter-spacing:.06em">▸ FIRE CONSOLE</span>',
     '<span style="flex:1"></span>',
-    '<button id="__bm_fv_asc" style="',
-      'font-size:8px;color:#4a9eff;',
-      'border:1px solid rgba(74,158,255,.3);',
-      'background:rgba(74,158,255,.05);',
-      'border-radius:3px;padding:1px 6px;cursor:pointer">AUTO ↓</button>',
-    '<button id="__bm_fv_clr" style="',
-      'font-size:8px;color:#64748b;',
-      'border:1px solid rgba(255,255,255,.08);',
-      'background:transparent;border-radius:3px;',
-      'padding:1px 6px;cursor:pointer;margin-left:4px">CLR</button>',
+    '<button id="__bm_fv_cpy" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">COPY</button>',
+    '<button id="__bm_fv_dwn" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">DOWN</button>',
+    '<button id="__bm_fv_json" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">JSON</button>',
+    '<button id="__bm_fv_asc" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">AUTO ↓</button>',
+    '<button id="__bm_fv_clr" style="font-size:8px;color:#64748b;border:1px solid #e2e8f0;background:#f8fafc;border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">CLR</button>',
     '</div>',
     '<div id="__bm_fv_log" style="',
-      'height:130px;overflow-y:auto;',
+      'height:120px;overflow-y:auto;',
       'font-size:10px;line-height:1.6;',
-      'background:#0a0a0f;padding:6px 8px;',
-      'margin:0 14px 12px;border-radius:6px;',
-      'border:1px solid rgba(255,255,255,.04)">',
-    '<span id="__bm_fv_cur" style="color:#00bcd4;animation:fvBlink 1s step-end infinite">█</span>',
+      'background:#f8fafc;padding:6px 8px;',
+      'margin:0 14px 12px;border-radius:8px;',
+      'border:1px solid #e2e8f0;color:#334155"',
+    '>',
+    '<span id="__bm_fv_cur" style="color:#6366f1;animation:fvBlink 1s step-end infinite">█</span>',
     '</div>',
     '</div>',
 
@@ -167,9 +172,7 @@ function _fv_buildHTML() {
   ].join('');
 }
 
-// Open (or re-open) the overlay and reset state
-function _fv_show(queue, totalShots) {
-  // Clean up any previous instance
+function _fv_show(data) {
   var prev = document.getElementById('__bm_fv');
   if (prev) prev.parentNode && prev.parentNode.removeChild(prev);
   var prevCss = document.getElementById('__bm_fv_css');
@@ -182,138 +185,180 @@ function _fv_show(queue, totalShots) {
   _fv_logEl   = document.getElementById('__bm_fv_log');
   _fv_cursor  = document.getElementById('__bm_fv_cur');
   _fv_lineNo  = 0;
-  _fv_counts  = { s: 0, b: 0, e: 0, d: 0 };
+  _fv_logLines = [];
+  _fv_shotsData = [];
+  _fv_counts  = { success: 0, busy: 0, soldout: 0, error: 0, neterr: 0 };
   _fv_startMs = Date.now();
-  _fv_total   = totalShots || 0;
+  _fv_total   = (data && data.totalShots) || 0;
   _fv_done    = 0;
   _fv_autoScr = true;
+  _fv_meta    = data || {};
+  _fv_dotEls  = {};
+  _fv_rowEls  = {};
+  _fv_eventRows = [];
+  _fv_backoffMs = (data && data.burstIntervalMs) || 0;
 
-  // Cache cell elements
-  _fv_cells = {};
-  for (var ri = 0; ri < _fv_plans.length; ri++) {
-    for (var ci = 0; ci < _fv_bkeys.length; ci++) {
-      var el = document.getElementById('__bm_fv_c_' + ri + '_' + ci);
-      if (el) _fv_cells[ri + '_' + ci] = el;
-    }
-  }
+  _fv_renderDots();
+  _fv_updateMeta();
+  _fv_updateProgress();
+  _fv_updateStats();
+  _fv_bindEvents();
+}
 
-  // Build product → position map from current state
-  _fv_ppos = _fv_buildPPos();
-
-  // Mark queued products as PENDING
-  if (queue && queue.length) {
-    for (var i = 0; i < queue.length; i++) {
-      var pos = _fv_ppos[queue[i].productId];
-      if (!pos) continue;
-      var cell = _fv_cells[pos.row + '_' + pos.col];
-      if (!cell) continue;
-      cell.style.background    = 'rgba(74,158,255,.08)';
-      cell.style.borderColor   = 'rgba(74,158,255,.25)';
-      cell.style.color         = '#4a9eff';
-      cell.textContent         = '···';
-      cell.title               = pos.name + ' ' + pos.billing;
-    }
-  }
-
-  // ── Button wiring ──
-  var cls = document.getElementById('__bm_fv_cls');
-  if (cls) cls.addEventListener('click', function() {
-    var ov = document.getElementById('__bm_fv');
-    if (ov) ov.parentNode && ov.parentNode.removeChild(ov);
-    var css = document.getElementById('__bm_fv_css');
-    if (css) css.parentNode && css.parentNode.removeChild(css);
-  });
-
-  var asc = document.getElementById('__bm_fv_asc');
-  if (asc) asc.addEventListener('click', function() {
-    _fv_autoScr = !_fv_autoScr;
-    asc.style.color       = _fv_autoScr ? '#4a9eff' : '#64748b';
-    asc.style.borderColor = _fv_autoScr ? 'rgba(74,158,255,.3)' : 'rgba(255,255,255,.08)';
-  });
-
-  var clr = document.getElementById('__bm_fv_clr');
-  if (clr) clr.addEventListener('click', function() {
-    var lg = document.getElementById('__bm_fv_log');
-    if (lg) {
-      lg.innerHTML = '<span id="__bm_fv_cur" style="color:#00bcd4;animation:fvBlink 1s step-end infinite">█</span>';
-      _fv_cursor = document.getElementById('__bm_fv_cur');
-      _fv_lineNo = 0;
-    }
-  });
-
-  // ── Drag support ──
-  var hd = document.getElementById('__bm_fv_h');
-  var ov = document.getElementById('__bm_fv');
-  if (hd && ov) {
-    var _fv_ox = 0, _fv_oy = 0, _fv_left = 0, _fv_top = 0, _fv_drag = false;
-    hd.addEventListener('mousedown', function(e) {
-      if (e.target.tagName === 'BUTTON') return;
-      _fv_drag = true;
-      _fv_ox = e.clientX; _fv_oy = e.clientY;
-      var r = ov.getBoundingClientRect();
-      _fv_left = r.left; _fv_top = r.top;
-      ov.style.transition = 'none';
-      ov.style.transform  = 'none';
-      ov.style.left       = _fv_left + 'px';
-      ov.style.top        = _fv_top  + 'px';
-      e.preventDefault();
-    });
-    document.addEventListener('mousemove', function(e) {
-      if (!_fv_drag) return;
-      var o = document.getElementById('__bm_fv');
-      if (!o) { _fv_drag = false; return; }
-      o.style.left = (_fv_left + e.clientX - _fv_ox) + 'px';
-      o.style.top  = (_fv_top  + e.clientY - _fv_oy) + 'px';
-    });
-    document.addEventListener('mouseup', function() { _fv_drag = false; });
+function _fv_renderDots() {
+  var wrap = document.getElementById('__bm_fv_dots');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  for (var i = 0; i < _fv_total; i++) {
+    var d = document.createElement('div');
+    d.id = '__bm_fv_d_' + i;
+    d.className = 'fv-dot pending';
+    d.style.cssText = 'width:10px;height:10px;border-radius:2px;border:1px solid #e2e8f0;background:#e2e8f0;transition:all .25s';
+    d.title = '#' + (i + 1) + ' 待发射';
+    wrap.appendChild(d);
+    _fv_dotEls[i] = d;
   }
 }
 
-// Update a matrix cell with the shot result
-function _fv_setCellResult(productId, outcome, rtt, code, bizId) {
-  var pos = _fv_ppos[productId];
-  if (!pos) return;
-  var cell = _fv_cells[pos.row + '_' + pos.col];
-  if (!cell) return;
-  var cfg = {
-    success: { bg: 'rgba(46,204,113,.2)',   bc: 'rgba(46,204,113,.6)',   c: '#2ecc71', t: 'OK'  },
-    busy:    { bg: 'rgba(243,156,18,.15)',   bc: 'rgba(243,156,18,.45)', c: '#f39c12', t: '555' },
-    soldout: { bg: 'rgba(100,116,139,.08)', bc: 'rgba(100,116,139,.25)', c: '#64748b', t: '∅'   },
-    error:   { bg: 'rgba(231,76,60,.15)',    bc: 'rgba(231,76,60,.45)',  c: '#e74c3c', t: 'ERR' },
-    neterr:  { bg: 'rgba(231,76,60,.1)',     bc: 'rgba(231,76,60,.35)',  c: '#e74c3c', t: '⚡'  }
-  };
-  var s = cfg[outcome] || cfg.error;
-  cell.style.background  = s.bg;
-  cell.style.borderColor = s.bc;
-  cell.style.color       = s.c;
-  cell.textContent       = s.t;
-  var tip = pos.name + ' ' + pos.billing + ' — ' + outcome;
-  if (rtt)   tip += ' ' + rtt + 'ms';
-  if (code)  tip += ' (code ' + code + ')';
-  if (bizId) tip += ' bizId=' + String(bizId).slice(-8);
-  cell.title = tip;
+function _fv_updateDot(shotIdx, outcome) {
+  var d = _fv_dotEls[shotIdx];
+  if (!d) return;
+  var m = _FV_OUTCOME[outcome] || _FV_OUTCOME.error;
+  d.style.background = m.color;
+  d.style.borderColor = m.color;
+  d.style.boxShadow = '0 0 4px ' + m.color + '50';
+  d.className = 'fv-dot';
+  d.title = '#' + (shotIdx + 1) + ' ' + m.user;
   if (outcome === 'success') {
-    cell.style.animation = 'fvPulse .6s ease-out forwards';
-    setTimeout(function() { if (cell) cell.style.animation = ''; }, 700);
+    d.style.animation = 'fvPulse .6s ease-out forwards';
+    setTimeout(function(el) { return function() { el.style.animation = ''; }; }(d), 700);
   }
 }
 
-// Append a line to the terminal log
+function _fv_updateMeta() {
+  var el = document.getElementById('__bm_fv_meta');
+  if (!el || !_fv_meta) return;
+  var mode = _fv_meta.mode === 'manual' ? 'MANUAL' : 'AUTO';
+  var interval = (_fv_meta.burstIntervalMs || 2100) + 'ms';
+  var offsetMs = Number(_fv_meta.firstShotOffsetMs) || 0;
+  var staggerMs = Number(_fv_meta.staggerWindowMs) || 0;
+  var allocation = Array.isArray(_fv_meta.allocation) ? _fv_meta.allocation : [100];
+  var allocParts = [];
+  for (var i = 0; i < allocation.length; i++) {
+    allocParts.push('P' + (i + 1) + ' <b style="color:#1e293b">' + allocation[i] + '%</b>');
+  }
+  var parts = [
+    'Mode: <b style="color:#1e293b">' + mode + '</b>',
+    _fv_total + ' shots',
+    'interval: <b style="color:#1e293b">' + interval + '</b>',
+    'offset: <b style="color:#1e293b">' + (offsetMs > 0 ? '+' : '') + offsetMs + 'ms</b>',
+    staggerMs > 0 ? ('stagger: <b style="color:#1e293b">0–' + staggerMs + 'ms</b>') : 'stagger: off',
+    allocParts.join(' · ')
+  ];
+  el.innerHTML = parts.join(' <span style="color:#cbd5e1">·</span> ');
+}
+
+function _fv_updateProgress() {
+  var cnt = document.getElementById('__bm_fv_cnt');
+  if (cnt) cnt.textContent = _fv_done + '/' + _fv_total + ' shots';
+  var pb = document.getElementById('__bm_fv_pb');
+  if (pb && _fv_total > 0) pb.style.width = Math.round(_fv_done / _fv_total * 100) + '%';
+}
+
+function _fv_userResultText(outcome, code, serverMsg) {
+  var m = _FV_OUTCOME[outcome] || _FV_OUTCOME.error;
+  var txt = m.user;
+  if (outcome === 'error' && serverMsg) txt += ': ' + serverMsg;
+  return txt;
+}
+
+function _fv_addTimelineRow(d) {
+  var wrap = document.getElementById('__bm_fv_timeline');
+  if (!wrap) return;
+
+  var idx = d.shotIdx;
+  var m = _FV_OUTCOME[d.outcome] || _FV_OUTCOME.error;
+  var name = _fv_productName(d.productId);
+  var ticketMask = d.ticketMask || '—';
+  var rttText = typeof d.rtt === 'number' ? d.rtt + 'ms' : '';
+  var resultText = _fv_userResultText(d.outcome, d.code, d.serverMsg);
+
+  var row = document.createElement('div');
+  row.id = '__bm_fv_r_' + idx;
+  row.className = 'fv-row';
+  row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,.5);font-size:10px;transition:background .15s';
+  row.innerHTML =
+    '<span style="color:#94a3b8;min-width:22px">#' + (idx + 1) + '</span>' +
+    '<span style="color:#64748b;min-width:18px">P' + (d.priority || '?') + '</span>' +
+    '<span style="color:#1e293b;min-width:34px;font-weight:700">' + _fv_escHtml(name) + '</span>' +
+    '<span style="color:#94a3b8;font-size:9px">' + _fv_escHtml(ticketMask) + '</span>' +
+    '<span style="color:' + m.color + ';min-width:14px;text-align:center">' + m.icon + '</span>' +
+    '<span style="color:' + m.color + ';flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + _fv_escHtml(resultText) + '</span>' +
+    (rttText ? '<span style="color:#94a3b8;font-size:9px">' + rttText + '</span>' : '');
+
+  var tip = d.productId + ' · priority ' + (d.priority || '?');
+  if (typeof d.code === 'number') tip += ' · code ' + d.code;
+  if (d.serverMsg) tip += '\n' + d.serverMsg;
+  row.title = tip;
+
+  _fv_rowEls[idx] = row;
+  _fv_rebuildTimeline();
+}
+
+function _fv_addTimelineEvent(text, color) {
+  var wrap = document.getElementById('__bm_fv_timeline');
+  if (!wrap) return;
+  var row = document.createElement('div');
+  row.className = 'fv-row';
+  row.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;padding:3px 8px;border-radius:6px;background:rgba(99,102,241,.06);font-size:9px;transition:background .15s';
+  row.innerHTML = '<span style="color:' + (color || '#6366f1') + ';font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + _fv_escHtml(text) + '</span>';
+  _fv_eventRows.push(row);
+  _fv_rebuildTimeline();
+}
+
+function _fv_rebuildTimeline() {
+  var wrap = document.getElementById('__bm_fv_timeline');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  var keys = Object.keys(_fv_rowEls).map(Number).sort(function(a, b) { return a - b; });
+  for (var i = 0; i < keys.length; i++) {
+    wrap.appendChild(_fv_rowEls[keys[i]]);
+  }
+  for (var j = 0; j < _fv_eventRows.length; j++) {
+    wrap.appendChild(_fv_eventRows[j]);
+  }
+  wrap.scrollTop = wrap.scrollHeight;
+}
+
+function _fv_updateStats() {
+  var ss = document.getElementById('__bm_fv_ss');
+  if (ss) ss.querySelector('b').textContent = String(_fv_counts.success);
+  var sb = document.getElementById('__bm_fv_sb');
+  if (sb) sb.querySelector('b').textContent = String(_fv_counts.busy);
+  var se = document.getElementById('__bm_fv_se');
+  if (se) se.querySelector('b').textContent = String(_fv_counts.error + _fv_counts.neterr);
+  var sd = document.getElementById('__bm_fv_sd');
+  if (sd) sd.querySelector('b').textContent = String(_fv_counts.soldout);
+  var bo = document.getElementById('__bm_fv_boff');
+  if (bo) bo.querySelector('b').textContent = String(_fv_backoffMs) + 'ms';
+  var st = document.getElementById('__bm_fv_st');
+  if (st) st.textContent = (Date.now() - _fv_startMs) + 'ms';
+}
+
 function _fv_addLine(text, color) {
   var lg = document.getElementById('__bm_fv_log');
   if (!lg) return;
   _fv_lineNo++;
-  var now = new Date();
-  var pad2 = function(n) { return n < 10 ? '0' + n : '' + n; };
-  var pad3 = function(n) { return n < 10 ? '00' + n : n < 100 ? '0' + n : '' + n; };
-  var ts = pad2(now.getHours()) + ':' + pad2(now.getMinutes()) + ':' +
-           pad2(now.getSeconds()) + '.' + pad3(now.getMilliseconds());
+  var ts = _fv_formatTs(new Date());
+  var lineText = '[' + ts + '] ' + text;
+  _fv_logLines.push(lineText);
+
   var row = document.createElement('div');
   row.style.cssText = 'display:flex;gap:5px;align-items:baseline';
   row.innerHTML =
-    '<span style="color:#1e3a5f;font-size:9px;min-width:18px;text-align:right;flex-shrink:0">' + _fv_lineNo + '</span>' +
-    '<span style="color:#1e293b;font-size:9px;flex-shrink:0">[' + ts + ']</span>' +
-    '<span style="color:' + (color || '#4a9eff') + ';word-break:break-all">' + _fv_escHtml(text) + '</span>';
+    '<span style="color:#cbd5e1;font-size:9px;min-width:18px;text-align:right;flex-shrink:0">' + _fv_lineNo + '</span>' +
+    '<span style="color:#94a3b8;font-size:9px;flex-shrink:0">[' + ts + ']</span>' +
+    '<span style="color:' + (color || '#475569') + ';word-break:break-all">' + _fv_escHtml(text) + '</span>';
   var cur = document.getElementById('__bm_fv_cur');
   if (cur && cur.parentNode === lg) {
     lg.insertBefore(row, cur);
@@ -323,91 +368,252 @@ function _fv_addLine(text, color) {
   if (_fv_autoScr) lg.scrollTop = lg.scrollHeight;
 }
 
-// Refresh stats bar and progress bar
-function _fv_refreshStats() {
-  var ss = document.getElementById('__bm_fv_ss'); if (ss) ss.textContent = '✓ ' + _fv_counts.s;
-  var sb = document.getElementById('__bm_fv_sb'); if (sb) sb.textContent = '⚠ ' + _fv_counts.b;
-  var se = document.getElementById('__bm_fv_se'); if (se) se.textContent = '✗ ' + _fv_counts.e;
-  var sd = document.getElementById('__bm_fv_sd'); if (sd) sd.textContent = '⊘ ' + _fv_counts.d;
-  var st = document.getElementById('__bm_fv_st'); if (st) st.textContent = (Date.now() - _fv_startMs) + 'ms';
-  var cnt = document.getElementById('__bm_fv_cnt');
-  if (cnt) cnt.textContent = _fv_done + '/' + _fv_total + ' shots';
-  var pb = document.getElementById('__bm_fv_pb');
-  if (pb && _fv_total > 0) pb.style.width = Math.round(_fv_done / _fv_total * 100) + '%';
+function _fv_copyLog() {
+  var text = _fv_logLines.join('\n');
+  if (!text) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).catch(function() {});
+  } else {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+  }
 }
 
-// Central message handler
+function _fv_downloadLog() {
+  var text = _fv_logLines.join('\n');
+  if (!text) return;
+  var blob = new Blob([text + '\n'], { type: 'text/plain' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'fire-matrix-log-' + Date.now() + '.txt';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function() {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 0);
+}
+
+function _fv_downloadJson() {
+  var payload = {
+    meta: {
+      exportedAt: Date.now(),
+      mode: _fv_meta.mode || 'unknown',
+      burstIntervalMs: _fv_meta.burstIntervalMs || 0,
+      firstShotOffsetMs: _fv_meta.firstShotOffsetMs || 0,
+      staggerWindowMs: _fv_meta.staggerWindowMs || 0,
+      allocation: _fv_meta.allocation || [],
+      enableDynamicSwitch: _fv_meta.enableDynamicSwitch,
+      totalShots: _fv_total,
+      startMs: _fv_meta.startMs || _fv_startMs,
+      elapsedMs: Date.now() - _fv_startMs
+    },
+    counts: _fv_counts,
+    shots: _fv_shotsData,
+    logs: _fv_logLines
+  };
+  var blob = new Blob([JSON.stringify(payload, null, 2) + '\n'], { type: 'application/json' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'fire-matrix-data-' + Date.now() + '.json';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function() {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 0);
+}
+
+function _fv_clearLog() {
+  var lg = document.getElementById('__bm_fv_log');
+  if (lg) {
+    lg.innerHTML = '<span id="__bm_fv_cur" style="color:#6366f1;animation:fvBlink 1s step-end infinite">█</span>';
+    _fv_cursor = document.getElementById('__bm_fv_cur');
+    _fv_lineNo = 0;
+    _fv_logLines = [];
+    _fv_shotsData = [];
+  }
+}
+
+function _fv_bindEvents() {
+  var cls = document.getElementById('__bm_fv_cls');
+  if (cls) cls.addEventListener('click', function() {
+    var ov = document.getElementById('__bm_fv');
+    if (ov) ov.parentNode && ov.parentNode.removeChild(ov);
+    var css = document.getElementById('__bm_fv_css');
+    if (css) css.parentNode && css.parentNode.removeChild(css);
+  });
+
+  var cpy = document.getElementById('__bm_fv_cpy');
+  if (cpy) cpy.addEventListener('click', _fv_copyLog);
+
+  var dwn = document.getElementById('__bm_fv_dwn');
+  if (dwn) dwn.addEventListener('click', _fv_downloadLog);
+
+  var json = document.getElementById('__bm_fv_json');
+  if (json) json.addEventListener('click', _fv_downloadJson);
+
+  var asc = document.getElementById('__bm_fv_asc');
+  if (asc) asc.addEventListener('click', function() {
+    _fv_autoScr = !_fv_autoScr;
+    asc.style.color       = _fv_autoScr ? '#6366f1' : '#64748b';
+    asc.style.borderColor = _fv_autoScr ? 'rgba(99,102,241,.25)' : '#e2e8f0';
+    asc.style.background  = _fv_autoScr ? 'rgba(99,102,241,.06)' : '#f8fafc';
+  });
+
+  var clr = document.getElementById('__bm_fv_clr');
+  if (clr) clr.addEventListener('click', _fv_clearLog);
+
+  var hd = document.getElementById('__bm_fv_h');
+  var ov = document.getElementById('__bm_fv');
+  if (hd && ov) {
+    var ox = 0, oy = 0, left = 0, top = 0, dragging = false;
+    hd.addEventListener('mousedown', function(e) {
+      if (e.target.tagName === 'BUTTON') return;
+      dragging = true;
+      ox = e.clientX; oy = e.clientY;
+      var r = ov.getBoundingClientRect();
+      left = r.left; top = r.top;
+      ov.style.transition = 'none';
+      ov.style.transform  = 'none';
+      ov.style.left       = left + 'px';
+      ov.style.top        = top  + 'px';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', function(e) {
+      if (!dragging) return;
+      var o = document.getElementById('__bm_fv');
+      if (!o) { dragging = false; return; }
+      o.style.left = (left + e.clientX - ox) + 'px';
+      o.style.top  = (top  + e.clientY - oy) + 'px';
+    });
+    document.addEventListener('mouseup', function() { dragging = false; });
+  }
+}
+
 window.addEventListener('message', function(e) {
   if (!e.data || !e.data.__miaosha_overlay) return;
   var d = e.data;
 
-  // ── Fire burst started: open/reset the viz overlay ──
   if (d.type === 'FIRE_BATCH_START') {
-    var q     = (d.data && d.data.queue)      || [];
-    var total = (d.data && d.data.totalShots) || q.length;
-    var initialCount = (d.data && d.data.initialCount) || 0;
-    var followUpCount = (d.data && d.data.followUpCount) || 0;
-    _fv_show(q, total);
-    if (initialCount > 0 || followUpCount > 0) {
-      _fv_addLine('▶ Auto plan ' + total + ' shots · initial ' + initialCount + ' concurrent · follow-up ' + followUpCount + ' randomized', '#4a9eff');
-    } else {
-      _fv_addLine('▶ Burst ' + total + ' shots @ 50ms intervals', '#4a9eff');
-    }
+    _fv_show(d.data);
+    var total = (d.data && d.data.totalShots) || 0;
+    _fv_addLine('▶ Strike ' + total + ' shots · burst', '#6366f1');
+    _fv_addLine('⚙ CONFIG ' + JSON.stringify({
+      mode: d.data.mode,
+      burstIntervalMs: d.data.burstIntervalMs,
+      firstShotOffsetMs: d.data.firstShotOffsetMs,
+      staggerWindowMs: d.data.staggerWindowMs,
+      allocation: d.data.allocation,
+      enableDynamicSwitch: d.data.enableDynamicSwitch,
+      totalShots: d.data.totalShots,
+      startMs: d.data.startMs
+    }), '#94a3b8');
     return;
   }
 
-  // ── Structured per-shot result: update matrix cell ──
+  if (!document.getElementById('__bm_fv')) return;
+
   if (d.type === 'FIRE_SHOT_RESULT' && d.data) {
     var outcome = d.data.outcome || 'error';
-    if      (outcome === 'success') _fv_counts.s++;
-    else if (outcome === 'busy')    _fv_counts.b++;
-    else if (outcome === 'soldout') _fv_counts.d++;
-    else                            _fv_counts.e++;
+    if (_fv_counts[outcome] !== undefined) _fv_counts[outcome]++;
+    else _fv_counts.error++;
     _fv_done++;
-    _fv_setCellResult(d.data.productId, outcome, d.data.rtt, d.data.code, d.data.bizId);
-    _fv_refreshStats();
+    _fv_shotsData.push(d.data);
+    _fv_updateDot(d.data.shotIdx, outcome);
+    _fv_addTimelineRow(d.data);
+    _fv_updateStats();
+    _fv_updateProgress();
     return;
   }
 
-  // ── Plain text log line from fire execution ──
+  if (d.type === 'FIRE_TARGET_SWITCH' && d.data) {
+    var fromName = _fv_productName(d.data.fromProductId);
+    var toName = _fv_productName(d.data.toProductId);
+    var reason = d.data.reason || 'replan';
+    _fv_addLine('↺ TARGET SWITCH · ' + fromName + ' → ' + toName + ' · ' + reason, '#6366f1');
+    _fv_addTimelineEvent('↺ ' + fromName + ' → ' + toName, '#6366f1');
+    return;
+  }
+
+  if (d.type === 'FIRE_BACKOFF_UPDATE' && d.data) {
+    _fv_backoffMs = Number(d.data.currentInterval) || 0;
+    _fv_updateStats();
+    var added = Number(d.data.addedMs) || 0;
+    var reason = d.data.reason || 'backoff';
+    _fv_addLine('⌁ BACKOFF · interval=' + _fv_backoffMs + 'ms (+' + added + 'ms · ' + reason + ')', '#d97706');
+    _fv_addTimelineEvent('⌁ backoff ' + _fv_backoffMs + 'ms', '#d97706');
+    return;
+  }
+
+  if (d.type === 'FIRE_ALLOCATION_UPDATE' && d.data && d.data.targets) {
+    var targets = d.data.targets;
+    var parts = [];
+    for (var k = 0; k < targets.length; k++) {
+      var t = targets[k];
+      parts.push(_fv_productName(t.productId) + ' ' + (t.allocated || 0));
+    }
+    _fv_addLine('⚖ ALLOCATION · ' + parts.join(' · '), '#94a3b8');
+    _fv_addTimelineEvent('⚖ alloc ' + parts.join(' · '), '#94a3b8');
+    return;
+  }
+
   if (d.type === 'FIRE_RESULT') {
-    if (!document.getElementById('__bm_fv')) return; // viz not open
     var line = d.line || '';
-    var lc = '#4a9eff';
-    if (line.indexOf('ORDER') !== -1 || line.indexOf('bizId') !== -1) lc = '#2ecc71';
+    var lc = '#475569';
+    if (line.indexOf('ORDER') !== -1 || line.indexOf('bizId') !== -1) lc = '#059669';
     else if (line.indexOf('sold-out') !== -1)                          lc = '#64748b';
-    else if (line.indexOf('555') !== -1 || line.indexOf('busy') !== -1) lc = '#f39c12';
-    else if (line.indexOf('err') !== -1 || line.indexOf('block') !== -1) lc = '#e74c3c';
+    else if (line.indexOf('555') !== -1 || line.indexOf('busy') !== -1) lc = '#d97706';
+    else if (line.indexOf('err') !== -1 || line.indexOf('block') !== -1 || line.indexOf('failed') !== -1) lc = '#dc2626';
     _fv_addLine('→ ' + line, lc);
     return;
   }
 
-  // ── Order confirmed ──
-  if (d.type === 'BURST_FIRE_SUCCESS') {
-    if (!document.getElementById('__bm_fv')) return;
-    var biz = (d.data && d.data.bizId) ? String(d.data.bizId).slice(-8) : '?';
-    _fv_addLine('✔ ORDER SUCCESS — bizId=' + biz, '#2ecc71');
-    // Freeze cursor as green
+  if (d.type === 'BURST_FIRE_SUCCESS' && d.data) {
+    var biz = d.data.bizId ? String(d.data.bizId).slice(-8) : '?';
+    _fv_addLine('✔ ORDER SUCCESS · native pay dialog opened · bizId=' + biz, '#059669');
     var cur1 = document.getElementById('__bm_fv_cur');
-    if (cur1) { cur1.style.color = '#2ecc71'; cur1.style.animation = ''; }
+    if (cur1) { cur1.style.color = '#059669'; cur1.style.animation = ''; }
     return;
   }
 
-  // ── All shots fired, no success ──
+  if (d.type === 'STRIKE_PAYMENT_SUCCESS' && d.data) {
+    var orderId2 = d.data.orderId ? String(d.data.orderId).slice(-8) : '?';
+    _fv_addLine('✔ Payment confirmed · orderId=' + orderId2, '#059669');
+    return;
+  }
+
+  if (d.type === 'STRIKE_PAYMENT_EXPIRED' && d.data) {
+    var orderId3 = d.data.orderId ? String(d.data.orderId).slice(-8) : '?';
+    _fv_addLine('⊘ Payment expired · orderId=' + orderId3, '#d97706');
+    return;
+  }
+
+  if (d.type === 'STRIKE_PAYMENT_TIMEOUT' && d.data) {
+    var orderId4 = d.data.orderId ? String(d.data.orderId).slice(-8) : '?';
+    _fv_addLine('⊘ Payment status timeout · orderId=' + orderId4, '#64748b');
+    return;
+  }
+
   if (d.type === 'BURST_FIRE_DEPLETED') {
-    if (!document.getElementById('__bm_fv')) return;
     var tot = (d.data && d.data.total) || 0;
-    _fv_addLine('⊘ Depleted — ' + tot + ' shots, no order', '#e74c3c');
+    _fv_addLine('⊘ Depleted — ' + tot + ' shots, no order', '#dc2626');
     var cur2 = document.getElementById('__bm_fv_cur');
     if (cur2) { cur2.style.color = '#64748b'; cur2.style.animation = ''; }
     return;
   }
 
-  // ── Auth/gate failure before fire ──
   if (d.type === 'PREFIRE_STATUS' && d.data && !d.data.ok) {
-    if (!document.getElementById('__bm_fv')) return;
-    _fv_addLine('⊘ Prefire blocked: ' + (d.data.reason || 'unknown'), '#e74c3c');
+    _fv_addLine('⊘ Prefire blocked: ' + (d.data.reason || 'unknown'), '#dc2626');
     var cur3 = document.getElementById('__bm_fv_cur');
-    if (cur3) { cur3.style.color = '#e74c3c'; cur3.style.animation = ''; }
+    if (cur3) { cur3.style.color = '#dc2626'; cur3.style.animation = ''; }
   }
 });

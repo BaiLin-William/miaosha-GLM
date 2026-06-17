@@ -4,7 +4,16 @@ export interface AuthHeaders {
   bigmodelProject: string;
 }
 
-export type HttpMethod = 'GET' | 'POST';
+type HttpMethod = 'GET' | 'POST';
+
+type EndpointRole =
+  | 'Probe'
+  | 'Reserve'
+  | 'Commit'
+  | 'Poll'
+  | 'Route'
+  | 'Informational'
+  | 'Reject';
 
 export interface ApiEndpoint {
   id: string;
@@ -12,6 +21,7 @@ export interface ApiEndpoint {
   method: HttpMethod;
   path: string;
   description: string;
+  role: EndpointRole;
   hasBody: boolean;
   bodyTemplate: Record<string, unknown> | null;
   note?: string;
@@ -27,17 +37,3 @@ export interface TestResult {
 }
 
 export const AUTH_STORAGE_KEY = 'local:authHeaders';
-
-export type PaymentStatus = 'waiting' | 'pending' | 'success' | 'expired' | 'error';
-
-export interface PaymentState {
-  qrCode: string | null;
-  bizId: string | null;
-  amount: number | null;
-  productId: string | null;
-  status: PaymentStatus;
-  updatedAt: number;
-  errorMsg?: string;
-}
-
-export const PAYMENT_STORAGE_KEY = 'local:paymentState';

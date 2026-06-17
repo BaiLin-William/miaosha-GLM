@@ -20,7 +20,6 @@ function buildProductMatrix(productList) {
       var renewAmount = preview.renewAmount != null ? preview.renewAmount : preview.payAmount;
       matrix[currentBilling].push({
         id: preview.productId,
-        planKey: _planOrder[k],
         name: _planOrder[k],
         price: preview.monthlyPayAmount,
         originalPrice: preview.monthlyOriginalAmount,
@@ -45,19 +44,28 @@ function getAllProducts() {
   return [].concat(_productMatrix.monthly || [], _productMatrix.quarterly || [], _productMatrix.yearly || []);
 }
 
-function getSelectionSummary() {
+function findProductById(id) {
   var all = getAllProducts();
-  var selected = 0;
   for (var i = 0; i < all.length; i++) {
-    if (_selectedProducts[all[i].id]) selected++;
+    if (all[i].id === id) return all[i];
   }
+  return null;
+}
+
+function priorityIndexOf(productId) {
+  for (var i = 0; i < _priorityList.length; i++) {
+    if (_priorityList[i].productId === productId) return i;
+  }
+  return -1;
+}
+
+function getSelectionSummary() {
+  var selected = _priorityList.length;
   return {
-    total: all.length,
+    total: getAllProducts().length,
     selected: selected,
     tickets: _ticketCount,
     launchable: Math.min(selected, _ticketCount),
-    autoFollowUp: selected > 0 ? Math.max(0, _ticketCount - Math.min(selected, _ticketCount)) : 0,
-    shortage: Math.max(0, selected - _ticketCount),
   };
 }
 
@@ -67,26 +75,28 @@ function syncSelectionStatus() {
   var sel = document.getElementById('_prodSel');
   var fb = document.getElementById('_fb');
   var ammo = document.getElementById('_ammo');
-  var fc = document.getElementById('_fc');
-  var selc = document.getElementById('_selc');
-  var mx = document.getElementById('_mx');
   var cp = document.getElementById('_cpd');
   var cpb = document.getElementById('_cpb');
+  var meter = document.getElementById('_meter');
 
   if (summary.total > 0 && tag) {
-    tag.textContent = summary.selected + '/' + summary.total;
-    tag.className = 'tg ' + (summary.selected === summary.total ? 'tg-g' : 'tg-a');
+    tag.textContent = summary.selected + '/' + Math.min(summary.total, 3);
+    tag.className = 'tg ' + (summary.selected > 0 ? 'tg-g' : 'tg-a');
   }
 
   if (sel) {
     if (summary.total === 0) {
       sel.innerHTML = '';
     } else if (summary.selected === 0) {
-      sel.innerHTML = '<span style="color:#f59e0b">Select at least 1 product to enable Fire</span>';
-    } else if (summary.shortage > 0) {
-      sel.innerHTML = '<span style="color:#d97706"><b>' + summary.selected + '/' + summary.total + '</b> selected · <b>' + summary.tickets + '</b> tickets ready · at most <b>' + summary.launchable + '</b> requests</span>';
+      sel.innerHTML = '<span style="color:#f59e0b">Select up to 3 products to enable Fire</span>';
+    } else if (summary.tickets === 0) {
+      sel.innerHTML = '<span style="color:#d97706"><b>' + summary.selected + '</b> selected · <b>0</b> tickets · add captcha</span>';
     } else {
-      sel.innerHTML = '<b>' + summary.selected + '/' + summary.total + '</b> selected · <b>' + summary.tickets + '</b> tickets ready';
+      var names = _priorityList.map(function(item, idx) {
+        var p = findProductById(item.productId);
+        return (p ? p.name : item.productId.slice(-6)) + (idx < _priorityList.length - 1 ? ' > ' : '');
+      }).join('');
+      sel.innerHTML = '<b>' + summary.selected + '</b> selected · <b>' + summary.tickets + '</b> tickets · priority ' + names;
     }
   }
 
@@ -98,23 +108,21 @@ function syncSelectionStatus() {
     if (summary.selected === 0) {
       ammo.textContent = 'Select products to calculate burst size';
       ammo.style.color = '#64748b';
-    } else if (summary.autoFollowUp > 0) {
-      ammo.textContent = summary.selected + ' selected · ' + summary.tickets + ' tickets ready · auto sends ' + summary.launchable + ' initial + ' + summary.autoFollowUp + ' follow-up';
-      ammo.style.color = '#059669';
-    } else if (summary.shortage > 0) {
-      ammo.textContent = summary.selected + ' selected · ' + summary.tickets + ' tickets ready · auto initial sends ' + summary.launchable + ' requests';
+    } else if (summary.tickets === 0) {
+      ammo.textContent = summary.selected + ' selected · 0 tickets · add captcha first';
       ammo.style.color = '#d97706';
     } else {
-      ammo.textContent = summary.selected + ' selected · ' + summary.tickets + ' tickets ready · auto initial sends ' + summary.launchable + ' requests';
+      ammo.textContent = summary.selected + ' selected · ' + summary.tickets + ' tickets · ' + summary.launchable + ' ready to strike';
       ammo.style.color = '#059669';
     }
   }
-  if (fc) fc.textContent = summary.tickets;
-  if (selc) selc.textContent = summary.selected;
-  if (mx) mx.textContent = summary.launchable;
-  for (var j = 0; j < 10; j++) {
-    var p = document.getElementById('_fp' + j);
-    if (p) p.className = 'fp' + (j < Math.min(summary.launchable, 10) ? ' on' : '');
+
+  if (meter) {
+    var children = meter.children;
+    var ready = Math.min(summary.launchable, 10);
+    for (var j = 0; j < children.length; j++) {
+      children[j].className = 'fp' + (j < ready ? ' on' : '');
+    }
   }
 
   if (cp) {
@@ -128,63 +136,59 @@ function syncSelectionStatus() {
 }
 
 function restoreSelectedProducts() {
-  var saved = {};
-  var version = '';
+  var saved = null;
   try {
-    saved = JSON.parse(sessionStorage.getItem('bm_selected_products') || '{}') || {};
-    version = sessionStorage.getItem(SELECTION_VERSION_KEY) || '';
+    saved = JSON.parse(sessionStorage.getItem('bm_priority_v2') || 'null');
   } catch(e) {
-    saved = {};
-    version = '';
+    saved = null;
   }
 
-  _selectedProducts = {};
-  var hasAny = false;
-  var all = getAllProducts();
-
-  if (version === '1') {
-    for (var i = 0; i < all.length; i++) {
-      if (saved[all[i].id]) {
-        _selectedProducts[all[i].id] = true;
-        hasAny = true;
+  _priorityList = [];
+  if (saved && Array.isArray(saved.priorityList)) {
+    for (var i = 0; i < saved.priorityList.length && i < 3; i++) {
+      var item = saved.priorityList[i];
+      if (item && item.productId) {
+        _priorityList.push({ productId: item.productId });
       }
-    }
-  } else {
-    var legacyPlans = {};
-    for (var j = 0; j < all.length; j++) {
-      if (saved[all[j].id]) legacyPlans[all[j].planKey] = true;
-    }
-    var legacyKeys = Object.keys(legacyPlans);
-    if (legacyKeys.length > 0) {
-      for (var k = 0; k < all.length; k++) {
-        if (legacyPlans[all[k].planKey]) {
-          _selectedProducts[all[k].id] = true;
-          hasAny = true;
-        }
-      }
-    }
-  }
-
-  if (!hasAny) {
-    for (var m = 0; m < all.length; m++) {
-      _selectedProducts[all[m].id] = true;
     }
   }
 }
 
 function persistSelection() {
-  var all = getAllProducts();
-  var selected = {};
-  for (var i = 0; i < all.length; i++) {
-    var product = all[i];
-    if (_selectedProducts[product.id]) selected[product.id] = true;
-  }
+  var payload = { priorityList: _priorityList };
   try {
-    sessionStorage.setItem('bm_selected_products', JSON.stringify(selected));
-    sessionStorage.setItem(SELECTION_VERSION_KEY, '1');
+    sessionStorage.setItem('bm_priority_v2', JSON.stringify(payload));
   } catch(e) {}
-  postMsg('PRODUCT_SELECTION_CHANGED', { selected: selected, count: Object.keys(selected).length });
-  return selected;
+  postMsg('PRODUCT_SELECTION_CHANGED', payload);
+  return payload;
+}
+
+function toggleProductSelection(productId) {
+  var idx = priorityIndexOf(productId);
+  var maxFlash = document.getElementById('_prodTag');
+  var previousLen = _priorityList.length;
+  if (idx >= 0) {
+    _priorityList.splice(idx, 1);
+  } else {
+    if (_priorityList.length >= 3) {
+      if (maxFlash) {
+        maxFlash.textContent = 'MAX 3';
+        maxFlash.className = 'tg tg-r';
+        setTimeout(function() { syncSelectionStatus(); }, 1200);
+      }
+      return;
+    }
+    _priorityList.push({ productId: productId });
+  }
+  persistSelection();
+  renderProducts();
+  // Reset allocation to sensible defaults whenever the number of selected products changes.
+  if (_priorityList.length !== previousLen && typeof _fireConfig !== 'undefined') {
+    _fireConfig.allocation = defaultAllocation(_priorityList.length);
+    if (typeof sendFireConfigUpdate === 'function') sendFireConfigUpdate();
+  }
+  renderFireConfig();
+  syncSelectionStatus();
 }
 
 function updateProductMatrix(productList) {
@@ -192,11 +196,12 @@ function updateProductMatrix(productList) {
   _productMatrix = buildProductMatrix(productList || []);
   restoreSelectedProducts();
   persistSelection();
-  try { sessionStorage.setItem('bm_products', JSON.stringify(getVisibleProducts())); } catch(e) {}
   renderProducts();
+  renderFireConfig();
 }
 
 function loadBatchPreviewFromCache() {
+  if (!hasLocalAuthSignals()) return;
   try {
     var cached = JSON.parse(sessionStorage.getItem('bm_batch_preview') || 'null');
     if (cached && cached.data && cached.data.productList) {
@@ -205,42 +210,75 @@ function loadBatchPreviewFromCache() {
   } catch(e) {}
 }
 
-function hasLocalAuthSignals() {
+function getLocalAuthHeaders() {
   try {
-    return document.cookie.indexOf('bigmodel_token_production') !== -1 &&
-      !!localStorage.getItem('Bigmodel-Organization') &&
-      !!localStorage.getItem('Bigmodel-Project');
+    var jwt = '';
+    var cookies = document.cookie.split(';');
+    for (var i = 0; i < cookies.length; i++) {
+      var part = cookies[i].trim();
+      if (part.indexOf('bigmodel_token_production=') === 0) {
+        jwt = part.substring('bigmodel_token_production='.length);
+        break;
+      }
+    }
+    var org = localStorage.getItem('Bigmodel-Organization');
+    var proj = localStorage.getItem('Bigmodel-Project');
+    if (!jwt || !org || !proj) return null;
+    return {
+      authorization: jwt.indexOf('Bearer ') === 0 ? jwt : 'Bearer ' + jwt,
+      bigmodelOrganization: org,
+      bigmodelProject: proj
+    };
   } catch(e) {
-    return false;
+    return null;
   }
+}
+
+function hasLocalAuthSignals() {
+  return !!getLocalAuthHeaders();
 }
 
 function recoverViaAuthenticatedRefresh() {
   if (!hasLocalAuthSignals()) return false;
   _authFailed = false;
-  var authBanner = document.getElementById('_authBanner');
-  if (authBanner) authBanner.style.display = 'none';
   cmdToOverlay('REFRESH_BATCH_PREVIEW');
   return true;
 }
 
+function renderProductsLoading() {
+  var list = document.getElementById('_prodList');
+  var tag = document.getElementById('_prodTag');
+  if (!list) return;
+  list.innerHTML = '<div style="font-size:8px;color:#94a3b8;text-align:center;padding:10px 6px;line-height:1.8"><div class="spinner" style="width:14px;height:14px;border:2px solid #e2e8f0;border-top-color:#6366f1;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 6px"></div>Loading products…</div>';
+  if (tag) { tag.textContent = 'LOADING'; tag.className = 'tg tg-a'; }
+}
+
 function fetchBatchPreview() {
+  var auth = getLocalAuthHeaders();
+  if (!auth) return;
+  var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   fetch('/api/biz/pay/batch-preview', {
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json;charset=UTF-8' },
+    headers: {
+      'Content-Type': 'application/json;charset=UTF-8',
+      'authorization': auth.authorization,
+      'bigmodel-organization': auth.bigmodelOrganization,
+      'bigmodel-project': auth.bigmodelProject
+    },
     body: '{"invitationCode":""}'
   })
     .then(function(r) {
       return r.json();
     })
     .then(function(d) {
+      var t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      var rttMs = Math.round(t1 - t0);
+      applyRuntimeCalibration({ latencyMs: rttMs, calibratedAt: Date.now(), source: 'batch-preview' });
       if (d.code === 200 && d.data && d.data.productList) {
         _authFailed = false;
         try { sessionStorage.setItem('bm_batch_preview', JSON.stringify(d)); } catch(e) {}
         updateProductMatrix(d.data.productList);
-        var authBanner = document.getElementById('_authBanner');
-        if (authBanner) authBanner.style.display = 'none';
       } else if (d.code === 1001) {
         if (recoverViaAuthenticatedRefresh()) {
           return;
@@ -248,23 +286,31 @@ function fetchBatchPreview() {
         _authFailed = true;
         try { sessionStorage.removeItem('bm_batch_preview'); } catch(e) {}
         renderProductsAuthError();
-        var authBanner = document.getElementById('_authBanner');
-        if (authBanner) authBanner.style.display = 'block';
       }
     })
     .catch(function() {});
 }
 
 function renderProductsAuthError() {
+  _authFailed = true;
   var list = document.getElementById('_prodList');
   var tag = document.getElementById('_prodTag');
   if (!list) return;
   list.innerHTML =
     '<div style="font-size:8px;text-align:center;padding:10px 6px;line-height:1.8">' +
     '<div style="color:#dc2626;font-weight:700;margin-bottom:4px">&#9888; 需要登录</div>' +
-    '<a href="/login" style="display:inline-block;padding:3px 10px;background:#6366f1;color:#fff;border-radius:4px;text-decoration:none;font-size:8px;font-weight:700">登录 / 注册</a>' +
+    '<button id="_prodLogin" style="display:inline-block;padding:3px 10px;background:#6366f1;color:#fff;border-radius:4px;border:0;text-decoration:none;font-size:8px;font-weight:700;cursor:pointer">登录 / 注册</button>' +
     '<div style="color:#94a3b8;margin-top:4px;font-size:7px">登录后刷新页面即可查看可购产品</div>' +
     '</div>';
+  var btn = document.getElementById('_prodLogin');
+  if (btn) {
+    btn.addEventListener('click', function(e) {
+      e.preventDefault();
+      var siteBtn = document.querySelector('.register-btn.register-btn__style1.el-popover__reference') ||
+        document.querySelector('.register-btn');
+      if (siteBtn) siteBtn.click();
+    });
+  }
   if (tag) { tag.textContent = 'AUTH'; tag.className = 'tg tg-r'; }
 }
 
@@ -272,7 +318,6 @@ function renderProducts() {
   var products = getVisibleProducts();
   var list = document.getElementById('_prodList');
   var tag = document.getElementById('_prodTag');
-  var sel = document.getElementById('_prodSel');
   if (!list) return;
 
   if (products.length === 0) {
@@ -284,9 +329,11 @@ function renderProducts() {
   var html = '';
   for (var i = 0; i < products.length; i++) {
     var p = products[i];
-    var isSel = !!_selectedProducts[p.id];
+    var rank = priorityIndexOf(p.id);
+    var isSel = rank >= 0;
     var badge = '';
     if (p.tag) badge = ' <span style="font-size:6px;font-weight:800;padding:1px 4px;border-radius:3px;background:#fef3c7;color:#d97706">' + p.tag + '</span>';
+    var rankBadge = isSel ? ' <span class="pr-rk">P' + (rank + 1) + '</span>' : '';
     var priceHtml = p.price != null ? '¥' + formatAmount(p.price) : '-';
     var originalHtml = '';
     var currentAmountHtml = p.currentAmount != null ? '¥' + formatAmount(p.currentAmount) : '-';
@@ -294,10 +341,10 @@ function renderProducts() {
     if (p.originalPrice != null && Number(p.originalPrice) > Number(p.price)) {
       originalHtml = ' <span style="font-size:9px;color:#94a3b8;text-decoration:line-through">¥' + formatAmount(p.originalPrice) + '/月</span>';
     }
-    html += '<div class="pr-t' + (isSel ? ' on' : '') + '" data-id="' + p.id + '" data-plan="' + p.planKey + '">' +
+    html += '<div class="pr-t' + (isSel ? ' on' : '') + '" data-id="' + p.id + '">' +
       '<div class="pr-th">' +
         '<div class="pr-td">' + (isSel ? '✓' : '') + '</div>' +
-        '<div class="pr-tn">' + p.name + badge + '</div>' +
+        '<div class="pr-tn">' + p.name + badge + rankBadge + '</div>' +
         '<div class="pr-tp"><b>' + priceHtml + '</b>/月' + originalHtml + '</div>' +
         '<span class="pr-ts ' + (p.soldOut ? 'warn' : 'ok') + '">' + (p.soldOut ? '售罄' : '有货') + '</span>' +
       '</div>' +
@@ -311,21 +358,76 @@ function renderProducts() {
   list.innerHTML = html;
   syncSelectionStatus();
 
-  // Bind tier clicks
   var tiers = list.querySelectorAll('.pr-t');
   for (var t = 0; t < tiers.length; t++) {
     tiers[t].addEventListener('click', function(e) {
       var productId = this.getAttribute('data-id');
-      if (_selectedProducts[productId]) delete _selectedProducts[productId];
-      else _selectedProducts[productId] = true;
-      persistSelection();
-      renderProducts();
+      toggleProductSelection(productId);
+    });
+  }
+}
+
+function defaultAllocation(count) {
+  if (count === 1) return [100];
+  if (count === 2) return [70, 30];
+  return [70, 20, 10];
+}
+
+function normalizeAllocationValues(values, targetCount) {
+  var fallback = defaultAllocation(targetCount);
+  if (!Array.isArray(values) || values.length === 0) return fallback;
+  var nums = values.slice(0, targetCount).map(function(v) {
+    var n = Math.round(Number(v));
+    return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
+  });
+  while (nums.length < targetCount) nums.push(0);
+  var sum = nums.reduce(function(a, b) { return a + b; }, 0);
+  if (sum === 0) return fallback;
+  if (sum === 100) return nums;
+  var normalized = nums.map(function(v) { return Math.round((v / sum) * 100); });
+  var normSum = normalized.reduce(function(a, b) { return a + b; }, 0);
+  if (normSum !== 100 && normalized[0] != null) normalized[0] += 100 - normSum;
+  return normalized;
+}
+
+function renderFireConfig() {
+  var body = document.getElementById('_fireCfg');
+  if (!body) return;
+  if (_priorityList.length === 0) {
+    body.innerHTML = '<div class="cfg-val">Select up to 3 products in Target Products</div>';
+    return;
+  }
+
+  var allocation = normalizeAllocationValues(_fireConfig.allocation, _priorityList.length);
+
+  var html = '';
+  for (var i = 0; i < _priorityList.length; i++) {
+    var item = _priorityList[i];
+    var p = findProductById(item.productId);
+    var name = p ? p.name : item.productId.slice(-6);
+    var price = p && p.price != null ? '¥' + formatAmount(p.price) + '/月' : '';
+    var rankCls = i === 0 ? 'cfg-rk cfg-rk1' : (i === 1 ? 'cfg-rk cfg-rk2' : 'cfg-rk cfg-rk3');
+    var pct = allocation[i] ?? 0;
+    html +=
+      '<div class="cfg-sl">' +
+        '<div class="' + rankCls + '">P' + (i + 1) + '</div>' +
+        '<div class="cfg-n">' + name + '<span class="cfg-p">' + price + '</span></div>' +
+        '<input class="cfg-pct" id="_fireAlloc' + i + '" type="number" min="0" max="100" step="1" value="' + pct + '">%' +
+      '</div>';
+  }
+  body.innerHTML = html;
+
+  // Bind allocation inputs to fire config update
+  for (var j = 0; j < _priorityList.length; j++) {
+    var el = document.getElementById('_fireAlloc' + j);
+    if (!el) continue;
+    el.addEventListener('change', function() {
+      if (typeof sendFireConfigUpdate === 'function') sendFireConfigUpdate();
     });
   }
 }
 
 function setupProductUI() {
-  // Billing toggle
   var billEl = document.getElementById('_bill');
   if (billEl) {
     var btns = billEl.querySelectorAll('.pr-bl');
@@ -341,7 +443,6 @@ function setupProductUI() {
       });
     }
   }
-  // Restore billing
   try {
     var savedBilling = sessionStorage.getItem('bm_billing');
     if (savedBilling) _billing = savedBilling;
@@ -350,25 +451,16 @@ function setupProductUI() {
       allBtns[k].className = 'pr-bl' + (allBtns[k].getAttribute('data-b') === _billing ? ' on' : '');
     }
   } catch(e) {}
+
+  if (!hasLocalAuthSignals()) {
+    renderProductsAuthError();
+    renderFireConfig();
+    return;
+  }
+
   loadBatchPreviewFromCache();
+  if (!getVisibleProducts().length) renderProductsLoading();
   fetchBatchPreview();
-  setInterval(fetchBatchPreview, 30000);
-  // Request batch preview data from extension storage (pushed by content script)
   cmdToOverlay('REQUEST_BATCH_PREVIEW');
-
-  // Self-heal: if initial load misses due auth/bootstrap race, force refresh from isolated world.
-  // When auth signals appear after a previous auth failure, resume refresh automatically.
-  setTimeout(function() {
-    var canRetry = !_authFailed || hasLocalAuthSignals();
-    if (canRetry && getAllProducts().length === 0) {
-      cmdToOverlay('REFRESH_BATCH_PREVIEW');
-    }
-  }, 1200);
-
-  setInterval(function() {
-    var canRetry = !_authFailed || hasLocalAuthSignals();
-    if (canRetry && getAllProducts().length === 0) {
-      cmdToOverlay('REFRESH_BATCH_PREVIEW');
-    }
-  }, 10000);
+  renderFireConfig();
 }

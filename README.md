@@ -2,7 +2,7 @@
 
 > **智谱 Coding Plan 秒杀助手** — Chrome MV3 浏览器扩展，辅助抢购 bigmodel.cn 限量套餐。
 
-**当前状态：积极开发中。** 秒杀网站的防护策略持续升级，本项目的成功率也在动态变化。我们非常欢迎社区贡献代码、反馈问题、分享经验。
+**当前版本：v1.2.1。** 秒杀网站的防护策略持续升级，本项目的成功率也在动态变化。我们非常欢迎社区贡献代码、反馈问题、分享经验。
 
 ---
 
@@ -18,13 +18,15 @@
 
 | 功能 | 说明 |
 |------|------|
-| 倒计时提醒 | 系统通知 + 角标倒计时（60/30/15/5 分钟前提醒） |
+| 倒计时提醒 | 系统通知 + 角标倒计时（T-60/30/15/10/5 五段提醒，可静音） |
 | 验证码预取 | 自动拦截并缓存 Tencent CAPTCHA ticket，秒杀时跳过验证码 |
 | 同源请求代理 | 通过 MAIN world 注入绕过 CORS，确保 API 请求正常返回 |
 | NTP 校时 | 对 bigmodel.cn 服务器做延迟探测，对齐本地时钟 |
-| 自动开火 | 秒杀瞬间自动并发下单，支持多产品 + 多 ticket 策略 |
-| 开火可视化 | 3x3 产品矩阵实时展示每发请求的状态（成功/繁忙/错误/耗尽） |
-| 支付轮询 | 下单成功后自动轮询支付二维码状态 |
+| L1 信息条 | 在 bigmodel.cn 顶栏注入呼吸灯，展示当前时间、目标时间、倒计时与延迟 |
+| 智能开火 | Auto 模式按实测 latency 自动触发；支持首枪偏移 + 错峰抖动 + 动态退避（500/555 分别处理） |
+| 商品优先级 | 最多 3 个目标按 P1/P2/P3 排序，ticket 按优先级（默认 70/20/10）配比 |
+| 动态切换 | 目标 soldout 后自动移除并把剩余 ticket 重新分配到存活商品 |
+| 开火可视化 | Fire Matrix 实时展示 offset/stagger/配比/退避与每次发射状态 |
 | API 调试面板 | Popup DEV 模式可直接调用 bigmodel.cn 7 个 API 端点 |
 
 ---
@@ -42,9 +44,9 @@
 │  │ • Alarms API  │   │  │ bm-capture  │    │   bm-main.js    │  │ │
 │  │ • Badge 角标  │   │  │ (ISOLATED)  │◄──►│  (MAIN world)   │  │ │
 │  │ • 通知推送    │   │  │             │    │                  │  │ │
-│  │               │   │  │ • 倒计时UI  │    │ • XHR 拦截      │  │ │
-│  └───────┬───────┘   │  │ • Auth抓取  │    │ • 验证码监听     │  │ │
-│          │           │  │ • Storage桥 │    │ • 秒杀火力控制   │  │ │
+│  │               │   │  │ • Fire 调度 │    │ • XHR 拦截      │  │ │
+│  └───────┬───────┘   │  │ • Auth 抓取 │    │ • L1 顶栏注入   │  │ │
+│          │           │  │ • Storage桥 │    │ • Fire Matrix   │  │ │
 │  ┌───────▼───────┐   │  └─────────────┘    └─────────────────┘  │ │
 │  │    Popup       │   │                                           │ │
 │  │                │   └──────────────────────────────────────────┘ │
@@ -82,7 +84,7 @@ XHR 拦截到验证码响应               监听 window message
 
 ### 方式一：下载预编译包（推荐）
 
-1. 下载 zip 压缩包：[miaosha-GLM.zip](https://github.com/Rocke1001feller/miaosha-GLM/releases/download/1.0.0.alpha/miaosha-glm-1.0.0.alpha-chrome.zip)
+1. 下载 zip 压缩包：[miaosha-GLM.zip](https://github.com/Rocke1001feller/miaosha-GLM/releases/download/v1.2.1/miaosha-glm-1.2.1-chrome.zip)
 2. 解压 zip 文件（见下方[解压说明](#zip-解压说明)）
 3. 打开 Chrome 浏览器，访问 `chrome://extensions`
 4. 开启右上角的「开发者模式」
@@ -118,7 +120,7 @@ pnpm build
 根据你的操作系统，解压下载的 zip 文件：
 
 **macOS**
-- 双击 `miaosha-GLM-chrome-mv3-1.0.0.alpha.zip`，系统自动解压
+- 双击 `miaosha-GLM-chrome-mv3-1.2.1.zip`，系统自动解压
 - 或右键选择「用归档实用工具打开」
 
 **Windows**
@@ -127,7 +129,7 @@ pnpm build
 
 **Linux**
 ```bash
-unzip miaosha-GLM-chrome-mv3-1.0.0.alpha.zip
+unzip miaosha-GLM-chrome-mv3-1.2.1.zip
 ```
 
 解压后你会看到一个 `智谱秒杀助手` 文件夹，直接选择该文件夹加载到 Chrome 即可。
@@ -139,15 +141,15 @@ unzip miaosha-GLM-chrome-mv3-1.0.0.alpha.zip
 ```
 ├── entrypoints/
 │   ├── background.ts          # Service Worker：通知 + 角标倒计时
-│   ├── bm-capture.content.ts  # Content Script (ISOLATED)：验证码/认证/开火
+│   ├── bm-capture.content.ts  # Content Script (ISOLATED)：验证码/认证/Fire 调度
 │   ├── popup/                 # Popup 页面 (Svelte 5)
-│   └── options/               # 选项页 (Svelte 5)
+│   └── options/               # 选项页 (Svelte 5：通用 / 使用 / 架构 / 洞察 / 更新日志)
 ├── lib/
-│   ├── api/                   # API 客户端、Auth/Ticket/Payment 存储、开火策略
-│   └── settings/              # 秒杀时间、验证码配置
-├── src/bm-main/               # MAIN world 注入脚本源码（01-09 模块）
+│   ├── api/                   # API 客户端、Auth 存储、Fire 计划（票分配 + 自动开火）
+│   └── settings/              # 秒杀时间、验证码、Fire 策略配置
+├── src/bm-main/               # MAIN world 注入脚本源码（01-10 模块，含 L1 顶栏注入）
 ├── public/bm-main.js          # 自动生成的 IIFE（勿手动编辑）
-├── scripts/                   # 构建脚本 + E2E 回归门
+├── scripts/                   # 构建脚本（overlay 构建 + zip 打包）
 ├── tests/                     # 单元/组件/集成测试
 └── docs/                      # 架构文档、API 探查、故障复盘
 ```
@@ -157,13 +159,12 @@ unzip miaosha-GLM-chrome-mv3-1.0.0.alpha.zip
 ## 测试
 
 ```bash
-pnpm test            # 运行全部测试（65+ 用例）
+pnpm test            # 运行全部测试
 pnpm test:watch      # 监听模式
 pnpm test:ui         # 可视化 UI
-pnpm test:coverage   # 覆盖率报告
 ```
 
-测试分 6 层：纯逻辑 → 存储层 → bm-main JS → Svelte 组件 → Chrome API 集成 → E2E 回归。详见 `docs/testing.md`。
+测试分 5 层：纯逻辑 → 存储层 → bm-main JS → Svelte 组件 → Chrome API 集成。详见 `docs/testing.md`。
 
 ---
 
@@ -211,8 +212,25 @@ pnpm test:coverage   # 覆盖率报告
 
 - [架构与原理](docs/architecture.md) — 整体架构、核心机制、设计决策
 - [测试指南](docs/testing.md) — 测试分层、工具链、扩展测试套件
-- [API 探查](docs/bigmodel-batch-preview-api.md) — batch-preview 接口分析
-- [故障复盘](docs/postmortem-batch-preview-empty-body-2026-05-30.md) — JWT 竞态导致空响应体的排查过程
+
+---
+
+## 社区交流
+
+扫码加入 **飞书用户交流群**，与作者和其他用户实时讨论：
+
+<p align="center">
+  <img src="public/feishu-community-qr.png" alt="飞书用户交流群二维码" width="220" />
+</p>
+
+**适合什么时候加入：**
+
+- 🚀 **秒杀前**：确认配置是否正确、分享当天策略、查看最新防护应对
+- 🛠 **使用中遇到问题**：扩展失效、票池异常、Fire Matrix 状态异常时实时求助
+- 💡 **想贡献代码**：先在群里同步方案思路，避免重复造轮子
+- 📢 **第一时间获取更新**：新版本发布、重大防护变更会先在群里通知
+
+> **注意**：群内讨论与 GitHub Issues 互补 — 简单/即时问题优先群里反馈，bug 报告与功能建议请仍走 Issues 以便追踪。
 
 ---
 

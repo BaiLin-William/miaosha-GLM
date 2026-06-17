@@ -12,7 +12,7 @@
   /* ── §03 Entrypoints ── */
   const ENTRYPOINTS = [
     { icon: '⚙️', file: 'background.ts', title: '后台 Service Worker', role: 'SW', detail: 'R1（system notifications）+ R4（badge）。alarms.onAlarm 必须顶层注册。', bullets: ['读取 saleTimeConfig 计算下次秒杀', '调度 60/30/15/5 提醒并同步 badge', '浏览器关闭后靠 chrome.alarms 恢复'] },
-    { icon: '🔒', file: 'bm-capture.content.ts', title: 'Content Script (ISOLATED)', role: 'ISOLATED', detail: '负责 R2、R3 与 Auth 捕获，通过 postMessage 与 bm-main 互通。', bullets: ['接收 MAIN world 的 ticket / UI 事件', '写入 storage + 批量 fetch', '倒计时提醒 + soldOut watcher'] },
+    { icon: '🔒', file: 'bm-capture.content.ts', title: 'Content Script (ISOLATED)', role: 'ISOLATED', detail: '负责 R2、R3 与 Auth 捕获，通过 postMessage 与 bm-main 互通。', bullets: ['接收 MAIN world 的 ticket / UI 事件', '写入 storage + 批量 fetch', 'sale time 自动开火调度'] },
     { icon: '🚀', file: 'popup/', title: 'Popup DEV / PROD', role: 'POPUP', detail: 'Svelte 5 应用，DEV 调试 / PROD 秒杀。', bullets: ['Topbar 切换运行模式', 'DevContent API 卡片测试', 'ProdContent 开火 + 支付轮询'] },
     { icon: '📖', file: 'options/', title: '选项页 + 文档', role: 'OPTIONS', detail: 'saleTimeConfig 配置 + README 架构说明。', bullets: ['时间 / 时区 / 提醒校正', '验证码批量录入限制', '工作原理 + 软件架构文档'] },
   ];
@@ -28,22 +28,21 @@
   const TICKET_ACQ = [
     { label: 'Tencent CAPTCHA', desc: '拦截成功响应 → ticket + randstr' },
     { label: 'postMessage', desc: 'MAIN world → ISOLATED world' },
-    { label: 'local:ticketPool', desc: 'bm-capture 写入 storage' },
+    { label: 'page sessionStorage', desc: 'bm-capture 写入 __bm_tickets' },
   ];
   const TICKET_USE = [
-    { label: 'takeAll()', desc: '取出所有 TTL 内有效 ticket' },
-    { label: '× ProductId', desc: '每个 ticket × 每个商品组合' },
-    { label: 'batch-preview', desc: '发起秒杀预览请求' },
+    { label: 'read pool', desc: 'bm-capture 读取 page sessionStorage 中的 tickets' },
+    { label: 'build plan', desc: 'buildStrikeQueue 按优先级分配' },
+    { label: 'fire', desc: '顺序单线程 /api/biz/pay/preview 请求' },
   ];
 
   /* ── §07 Storage ── */
   const STORAGE = [
     { key: 'local:authHeaders', type: 'AuthHeaders', writers: ['bm-capture', 'authStore'], readers: ['popup', 'bm-capture'] },
-    { key: 'local:ticketPool', type: 'Ticket[]', writers: ['bm-capture'], readers: ['bm-capture'] },
-    { key: 'local:paymentState', type: 'PaymentState', writers: ['bm-capture'], readers: ['popup'] },
+    { key: 'page sessionStorage (__bm_tickets)', type: 'Ticket[]', writers: ['bm-capture'], readers: ['bm-capture'] },
     { key: 'local:saleTimeConfig', type: 'SaleTimeConfig', writers: ['options'], readers: ['background', 'bm-capture'] },
     { key: 'local:devMode', type: 'dev | prod', writers: ['popup'], readers: ['popup'] },
-    { key: 'local:selectedProducts', type: 'selected{}', writers: ['bm-main'], readers: ['bm-capture'] },
+    { key: 'local:selectedProducts', type: 'priorityList[]', writers: ['bm-main'], readers: ['bm-capture'] },
   ];
   const STORAGE_ACTORS = ['bm-capture', 'bm-main', 'popup', 'background', 'options', 'authStore'];
 
@@ -76,8 +75,8 @@
 └── options/               # Svelte 5 选项页 + 文档
 /lib/api/
 ├── client.ts · auth-store.ts
-├── ticket-store.ts · payment-store.ts
-└── catalog.ts · types.ts
+├── fire-plan.ts · types.ts
+└── catalog.ts
 /public/bm-main.js         # MAIN world 注入
 /output/chrome-mv3/         # 构建输出`;
 </script>
@@ -169,7 +168,7 @@
             <div class="ab-bus-icon">📦</div>
             <div class="ab-bus-title">chrome.storage.local</div>
             <div class="ab-bus-keys">
-              <span>authHeaders</span><span>ticketPool</span><span>paymentState</span><span>saleTimeConfig</span><span>devMode</span><span>selectedProducts</span>
+              <span>authHeaders</span><span>ticketPool</span><span>saleTimeConfig</span><span>devMode</span><span>selectedProducts</span>
             </div>
           </div>
           <!-- Arrows to bus -->
@@ -361,8 +360,7 @@
               <span class="panel-icon">⚡</span><h6>常用命令</h6>
             </div>
             <pre class="doc-code">npm run dev      # HMR 开发模式
-npm run build    # 生产构建 → output/chrome-mv3/
-npm run compile  # TypeScript 类型检查</pre>
+npm run build    # 生产构建 → output/chrome-mv3/</pre>
           </div>
         </div>
       </section>

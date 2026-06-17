@@ -18,6 +18,19 @@
   const canTest = $derived(!!authHeaders);
   const isLoading = $derived(testResult?.loading ?? false);
 
+  const roleClass = $derived(() => {
+    const map: Record<string, string> = {
+      Probe: 'role-probe',
+      Reserve: 'role-reserve',
+      Commit: 'role-commit',
+      Poll: 'role-poll',
+      Route: 'role-route',
+      Informational: 'role-info',
+      Reject: 'role-reject',
+    };
+    return map[endpoint.role] ?? 'role-info';
+  });
+
   function bodyPreview(): string {
     if (!endpoint.hasBody || !endpoint.bodyTemplate) return '';
     const keys = Object.keys(endpoint.bodyTemplate);
@@ -44,17 +57,6 @@
       .replace(/: (true|false|null)/g, ': <span class="jv">$1</span>');
   }
 
-  const headersHtml = $derived(() => {
-    if (!authHeaders) return '';
-    const lines = [
-      `Authorization: Bearer ${authHeaders.authorization.replace('Bearer ', '').slice(0, 20)}...`,
-      `Content-Type: application/json;charset=UTF-8`,
-      `bigmodel-organization: ${authHeaders.bigmodelOrganization}`,
-      `bigmodel-project: ${authHeaders.bigmodelProject}`,
-    ];
-    return lines.join('\n');
-  });
-
   const bodyHtml = $derived(() => {
     if (!endpoint.bodyTemplate) return '';
     return highlightJson(formatJson(endpoint.bodyTemplate));
@@ -66,6 +68,7 @@
     <span class="method-badge" class:post={endpoint.method === 'POST'} class:get={endpoint.method === 'GET'}>
       {endpoint.method}
     </span>
+    <span class="role-badge {roleClass()}">{endpoint.role}</span>
     <span class="card-path">{endpoint.path}</span>
   </div>
   <p class="card-desc">{endpoint.description}</p>
@@ -146,6 +149,24 @@
     background: rgba(16, 185, 129, 0.1);
     color: #10b981;
   }
+
+  .role-badge {
+    font-size: 8px;
+    font-weight: 800;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    flex-shrink: 0;
+  }
+
+  .role-probe { background: rgba(59, 130, 246, 0.1); color: #2563eb; }
+  .role-reserve { background: rgba(245, 158, 11, 0.12); color: #d97706; }
+  .role-commit { background: rgba(16, 185, 129, 0.12); color: #059669; }
+  .role-poll { background: rgba(139, 92, 246, 0.12); color: #7c3aed; }
+  .role-route { background: rgba(99, 102, 241, 0.12); color: #4f46e5; }
+  .role-info { background: rgba(148, 163, 184, 0.12); color: #64748b; }
+  .role-reject { background: rgba(220, 38, 38, 0.1); color: #dc2626; }
 
   .card-path {
     font-size: 11px;

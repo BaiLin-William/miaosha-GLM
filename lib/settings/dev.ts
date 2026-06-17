@@ -32,18 +32,4 @@ export const devEnvironment = {
   async set(mode: DevMode): Promise<void> {
     await storage.setItem<DevMode>(DEV_MODE_KEY, mode);
   },
-
-  async isDevelopment(): Promise<boolean> {
-    const mode = await this.get();
-    return mode === 'development';
-  },
-
-  async isProduction(): Promise<boolean> {
-    const mode = await this.get();
-    return mode === 'production';
-  },
-
-  default(): DevMode {
-    return DEFAULT_MODE;
-  },
 };

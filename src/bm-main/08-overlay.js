@@ -3,19 +3,14 @@ function buildHTML() {
   return '<style>' + CSS + '</style>' +
 
     // Header
-    '<div class="h"><span>&#128736;</span><h3>智谱秒杀助手</h3><button class="mn" id="_mn">&#8722;</button></div>' +
+    '<div class="h"><span>&#128736;</span><h3>智谱秒杀助手</h3><button class="opts" id="_opts" title="Open options">&#9881;</button><button class="mn" id="_mn">&#8722;</button></div>' +
     '<div class="b" id="_bd">' +
 
     // Card 1: Preparations
     '<div class="c"><div class="ch"><span class="ct">&#128736; Preparations</span><span class="tg tg-a">AUDIT</span></div>' +
     '<div class="pg">' +
-      '<div class="pc"><span class="pd" id="_ck"></span><span class="pn">Cookie</span></div>' +
-      '<div class="pc"><span class="pd" id="_ui"></span><span class="pn">User Info</span></div>' +
       '<div class="pc"><span class="pd" id="_pi"></span><span class="pn">Product ID</span></div>' +
       '<div class="pc" id="_cp"><span class="pd w" id="_cpd"></span><span class="pn">Captcha</span><span class="pb" id="_cpb"></span></div>' +
-    '</div>' +
-    '<div id="_authBanner" style="display:none;margin-top:5px;padding:5px 8px;border-radius:6px;background:#fef2f2;border:1px solid #fecaca;font-size:7px;color:#dc2626;text-align:center">' +
-    '&#9888; 请 <a href="/login" style="color:#6366f1;text-decoration:underline;font-weight:700">登录 / 注册</a> 后再使用助手' +
     '</div>' +
     '</div>' +
 
@@ -33,229 +28,287 @@ function buildHTML() {
 
     // Card 3: Captcha Pool
     '<div class="c" id="_poolCard">' +
-    '<div class="pl-h"><span class="pl-l">&#127915; Captcha Pool</span><span class="pl-c" id="_plc">0 <span class="pl-t"></span></span></div>' +
-    '<div class="gr" id="_grid"></div>' +
+    '<div class="pl-h"><span class="pl-l">&#127915; Captcha Pool</span><span class="pl-c" id="_plc">0 / 100</span></div>' +
+    '<div class="pm" id="_pm"></div>' +
+    '<div class="ps" id="_ps">暂无有效票 · 建议先录入验证码</div>' +
     '<button class="ab" id="_ab">+ Solve Captcha</button>' +
     '</div>' +
 
-    // Card 3: Fire
+    // Card 4: Fire
     '<div class="c">' +
     '<div class="ch"><span class="ct">&#128293; Fire</span><span class="tg tg-r">LAUNCH</span></div>' +
     '<div class="fm" id="_meter"></div>' +
-    '<div class="fi"><div><div class="fn" style="color:#f43f5e" id="_fc">0</div><div class="fl">tickets</div></div>' +
-    '<div><div class="fn" style="color:#6366f1" id="_selc">0</div><div class="fl">selected</div></div>' +
-    '<div><div class="fn" style="color:#10b981" id="_mx">0</div><div class="fl">requests</div></div></div>' +
+    '<div id="_fireCfg"></div>' +
+    '<div class="fc-row"><span class="fc-lbl">Mode<span class="fc-tip" data-tip="决定“什么时候发射”。Auto：插件自动倒计时并在秒杀时刻前根据实测延迟提前触发。Manual：禁用自动，只有点击 FIRE 才发射。推荐：Auto。">?</span></span><select class="fc-sel" id="_fireMode"><option value="auto">Auto</option><option value="manual">Manual</option></select></div>' +
+    '<div class="fc-row"><span class="fc-lbl">Burst Interval<span class="fc-tip" data-tip="Burst 模式下每枪之间的间隔（毫秒）。智谱后端使用 2 秒滑动窗口限流（阈值=1），低于 2 秒会触发大量 555。实测 2100ms 是单用户最优节奏：0% 555 且比 3000ms 快 31%。">?</span></span><input class="fc-num" id="_fireBurstInterval" type="number" min="500" max="10000" step="100" value="2100"></div>' +
+    '<div class="fc-row"><span class="fc-lbl">First Shot Offset<span class="fc-tip" data-tip="首枪相对 10:00:00.000 的偏移（毫秒）。负值提前发射以抢先进入窗口，正值延后以避开 1000 QPS 峰值。推荐：-50 ~ +100。">?</span></span><input class="fc-num" id="_fireOffset" type="number" min="-5000" max="5000" step="10" value="0"></div>' +
+    '<div class="fc-row"><span class="fc-lbl">Stagger Window<span class="fc-tip" data-tip="首枪抖动窗（毫秒）。实际首枪时刻 = 目标时刻 + 偏移 + random(0, 窗口)。用于把请求打散，避免所有用户挤在绝对零点。推荐：0 ~ 200。">?</span></span><input class="fc-num" id="_fireStagger" type="number" min="0" max="3000" step="50" value="0"></div>' +
+    '<div class="fc-row"><span class="fc-lbl">Backoff 500<span class="fc-tip" data-tip="遇到 code=500 “验证码校验服务异常”（腾讯核销层过载）时，每次增加的退避毫秒数。推荐：1000 ~ 1500。">?</span></span><input class="fc-num" id="_fireB500" type="number" min="500" max="5000" step="100" value="1200"></div>' +
+    '<div class="fc-row"><span class="fc-lbl">Backoff 555<span class="fc-tip" data-tip="遇到 code=555（智谱 2 秒滑动窗口限流）时，每次增加的退避毫秒数。推荐：200。">?</span></span><input class="fc-num" id="_fireB555" type="number" min="0" max="2000" step="50" value="200"></div>' +
+    '<div class="fc-row"><span class="fc-lbl">Max Backoff<span class="fc-tip" data-tip="动态间隔上限（毫秒）。无论触发多少次退避，间隔都不会超过此值。推荐：4000。">?</span></span><input class="fc-num" id="_fireMaxB" type="number" min="2100" max="8000" step="100" value="4000"></div>' +
+    '<div class="fc-row"><span class="fc-lbl">Soldout Threshold<span class="fc-tip" data-tip="同一商品连续 soldout 多少次后，将其移出轮换并把剩余 ticket 重新分配给存活商品。推荐：2。">?</span></span><input class="fc-num" id="_fireSoldout" type="number" min="1" max="5" step="1" value="2"></div>' +
+    '<div class="fc-row"><span class="fc-lbl">Dynamic Switch<span class="fc-tip" data-tip="开启后，soldout 商品会被自动移出并触发 ticket 重分配；关闭则保持原队列直到打完或手动停止。">?</span></span><input type="checkbox" id="_fireDynSwitch" checked></div>' +
+    '<div class="fc-row"><span class="fc-lbl">Pay<span class="fc-tip" data-tip="create-sign 使用的支付方式，决定打开支付宝还是微信支付。推荐：ALI（Alipay）。">?</span></span><select class="fc-sel" id="_firePayType"><option value="ALI">Alipay</option><option value="WE_CHAT">WeChat</option></select></div>' +
     '<button class="fb" id="_fb" disabled>&#9889; FIRE (0)</button>' +
     '<div style="font-size:8px;color:#64748b;text-align:center;padding:3px 0" id="_ammo"></div>' +
     '<div style="font-size:8px;color:#94a3b8;text-align:center;padding:2px 0" id="_auths">Auth: pending</div>' +
     '<div style="font-size:8px;color:#94a3b8;text-align:center;padding:2px 0" id="_auto">Auto: waiting…</div>' +
-    '<div class="lg" id="_log"></div>' +
     '</div>' +
-
-    // Card 4: Runtime
-    '<div class="c">' +
-    '<div class="ch"><span class="ct">&#9201; Runtime</span><span class="tg tg-g">LIVE</span></div>' +
-    '<div class="rr"><div class="rb"><div class="rv" style="color:#06b6d4" id="_lat">--<span style="font-size:9px;color:#94a3b8">ms</span></div><div class="rl">Latency</div></div>' +
-    '<div class="rb"><div class="rv" style="color:#f59e0b" id="_clk">--<span style="font-size:9px;color:#94a3b8">ms</span></div><div class="rl">Clock Offset</div></div></div>' +
-    '</div>' +
-
-    // Card 5: Payment
-    '<div class="c"><div class="pw" id="_pay"><div class="ph"><span>&#128179;</span><span class="pt">Payment</span><span class="ps sg" id="_pays">WAITING</span></div>' +
-    '<div class="pw-t" id="_payt">Waiting for order data...</div></div></div>' +
 
     '</div>';
+}
+
+function renderCaptchaMeter() {
+  var plc = document.getElementById('_plc');
+  var pm = document.getElementById('_pm');
+  var ps = document.getElementById('_ps');
+  if (!pm) return;
+
+  var max = BATCH_SESSION_LIMIT || 100;
+  var valid = _ticketCount || 0;
+
+  if (plc) plc.textContent = valid + ' / ' + max;
+
+  if (pm.children.length === 0) {
+    var sh = '';
+    for (var s = 0; s < 20; s++) sh += '<div></div>';
+    pm.innerHTML = sh;
+  }
+  var per = Math.max(1, Math.ceil(max / 20));
+  var filled = Math.min(20, Math.floor(valid / per));
+  for (var j = 0; j < 20; j++) {
+    pm.children[j].className = j < filled ? 'on' : '';
+  }
+
+  if (!ps) return;
+  var status = '', cls = 'ps-low';
+  if (valid === 0) {
+    status = '暂无有效票 · 建议先录入验证码';
+  } else if (valid <= max * 0.2) {
+    status = '票量偏低 · 继续录入可提升命中率';
+  } else if (valid <= max * 0.6) {
+    status = '票量中等 · 仍可继续补充';
+    cls = 'ps-mid';
+  } else if (valid < max) {
+    status = '票量充足 · 命中概率较高';
+    cls = 'ps-high';
+  } else {
+    status = '票池已满 · 当前最大火力';
+    cls = 'ps-high';
+  }
+  ps.textContent = status;
+  ps.className = 'ps ' + cls;
+}
+
+function applyFireConfigToControls(config) {
+  var mode = document.getElementById('_fireMode');
+  var burstInterval = document.getElementById('_fireBurstInterval');
+  var payType = document.getElementById('_firePayType');
+  var offset = document.getElementById('_fireOffset');
+  var stagger = document.getElementById('_fireStagger');
+  var b500 = document.getElementById('_fireB500');
+  var b555 = document.getElementById('_fireB555');
+  var maxB = document.getElementById('_fireMaxB');
+  var soldout = document.getElementById('_fireSoldout');
+  var dynSwitch = document.getElementById('_fireDynSwitch');
+  if (mode) mode.value = config.mode === 'manual' ? 'manual' : 'auto';
+  if (burstInterval) burstInterval.value = String(Math.max(500, Math.min(10000, Math.round(Number(config.burstIntervalMs)) || 2100)));
+  if (payType) payType.value = config.payType === 'WE_CHAT' ? 'WE_CHAT' : 'ALI';
+  if (offset) offset.value = String(Math.max(-5000, Math.min(5000, Math.round(Number(config.firstShotOffsetMs)) || 0)));
+  if (stagger) stagger.value = String(Math.max(0, Math.min(3000, Math.round(Number(config.staggerWindowMs)) || 0)));
+  if (b500) b500.value = String(Math.max(500, Math.min(5000, Math.round(Number(config.backoff500Ms)) || 1200)));
+  if (b555) b555.value = String(Math.max(0, Math.min(2000, Math.round(Number(config.backoff555Ms)) || 200)));
+  if (maxB) maxB.value = String(Math.max(2100, Math.min(8000, Math.round(Number(config.maxBackoffMs)) || 4000)));
+  if (soldout) soldout.value = String(Math.max(1, Math.min(5, Math.round(Number(config.soldoutStopThreshold)) || 2)));
+  if (dynSwitch) dynSwitch.checked = config.enableDynamicSwitch !== false;
+  for (var ai = 0; ai < 3; ai++) {
+    var ael = document.getElementById('_fireAlloc' + ai);
+    if (ael && Array.isArray(config.allocation) && config.allocation[ai] != null) {
+      ael.value = String(Math.max(0, Math.min(100, Math.round(Number(config.allocation[ai])) || 0)));
+    }
+  }
+}
+
+function normalizeAllocationArray(arr, targetCount) {
+  if (!Array.isArray(arr) || arr.length === 0) {
+    return targetCount === 1 ? [100] : targetCount === 2 ? [70, 30] : [70, 20, 10];
+  }
+  var nums = arr.slice(0, targetCount).map(function(v) {
+    var n = Math.round(Number(v));
+    return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
+  });
+  while (nums.length < targetCount) nums.push(0);
+  var sum = nums.reduce(function(a, b) { return a + b; }, 0);
+  if (sum === 0) return targetCount === 1 ? [100] : targetCount === 2 ? [70, 30] : [70, 20, 10];
+  if (sum === 100) return nums;
+  var normalized = nums.map(function(v) { return Math.round((v / sum) * 100); });
+  var normSum = normalized.reduce(function(a, b) { return a + b; }, 0);
+  if (normSum !== 100 && normalized[0] != null) normalized[0] += 100 - normSum;
+  return normalized;
+}
+
+function readFireConfigFromControls() {
+  var mode = document.getElementById('_fireMode');
+  var burstInterval = document.getElementById('_fireBurstInterval');
+  var payType = document.getElementById('_firePayType');
+  var offset = document.getElementById('_fireOffset');
+  var stagger = document.getElementById('_fireStagger');
+  var b500 = document.getElementById('_fireB500');
+  var b555 = document.getElementById('_fireB555');
+  var maxB = document.getElementById('_fireMaxB');
+  var soldout = document.getElementById('_fireSoldout');
+  var dynSwitch = document.getElementById('_fireDynSwitch');
+
+  var targetCount = Math.max(1, (_priorityList || []).length);
+  var allocInputs = [
+    document.getElementById('_fireAlloc0'),
+    document.getElementById('_fireAlloc1'),
+    document.getElementById('_fireAlloc2'),
+  ].slice(0, targetCount);
+  var allocation = allocInputs.map(function(el) {
+    return Math.round(Number(el ? el.value : 0));
+  });
+
+  return {
+    ...(_fireConfig || { burstIntervalMs: 2100 }),
+    mode: mode && mode.value === 'manual' ? 'manual' : 'auto',
+    burstIntervalMs: Math.max(500, Math.min(10000, Math.round(Number(burstInterval ? burstInterval.value : 2100)) || 2100)),
+    payType: payType && payType.value === 'WE_CHAT' ? 'WE_CHAT' : 'ALI',
+    firstShotOffsetMs: Math.max(-5000, Math.min(5000, Math.round(Number(offset ? offset.value : 0)) || 0)),
+    staggerWindowMs: Math.max(0, Math.min(3000, Math.round(Number(stagger ? stagger.value : 0)) || 0)),
+    allocation: normalizeAllocationArray(allocation, targetCount),
+    backoff500Ms: Math.max(500, Math.min(5000, Math.round(Number(b500 ? b500.value : 1200)) || 1200)),
+    backoff555Ms: Math.max(0, Math.min(2000, Math.round(Number(b555 ? b555.value : 200)) || 200)),
+    maxBackoffMs: Math.max(2100, Math.min(8000, Math.round(Number(maxB ? maxB.value : 4000)) || 4000)),
+    soldoutStopThreshold: Math.max(1, Math.min(5, Math.round(Number(soldout ? soldout.value : 2)) || 2)),
+    enableDynamicSwitch: dynSwitch ? !!dynSwitch.checked : true,
+  };
+}
+
+function sendFireConfigUpdate() {
+  var cfg = readFireConfigFromControls();
+  _fireConfig = cfg;
+  window.postMessage({ __miaosha_cmd: true, type: 'SET_FIRE_CONFIG', data: cfg }, '*');
+}
+
+function bindFireControlEvents() {
+  var ids = ['_fireMode', '_fireBurstInterval', '_firePayType', '_fireOffset', '_fireStagger', '_fireB500', '_fireB555', '_fireMaxB', '_fireSoldout', '_fireDynSwitch'];
+  for (var i = 0; i < ids.length; i++) {
+    var el = document.getElementById(ids[i]);
+    if (!el) continue;
+    el.addEventListener('change', sendFireConfigUpdate);
+  }
+  for (var j = 0; j < 3; j++) {
+    var ael = document.getElementById('_fireAlloc' + j);
+    if (ael) ael.addEventListener('change', sendFireConfigUpdate);
+  }
 }
 
 // ── Overlay Injection ──
 function injectOverlay() {
   if (document.getElementById(O)) return;
-  // Only show overlay UI on the target page
   if (location.pathname !== '/glm-coding') return;
   var overlay = document.createElement('div');
   overlay.id = O;
   overlay.innerHTML = buildHTML();
   (document.body || document.documentElement).appendChild(overlay);
 
-  // Meter
   var meter = document.getElementById('_meter');
   if (meter) { var mh = ''; for (var i=0;i<10;i++) mh += '<div class="fp" id="_fp'+i+'"></div>'; meter.innerHTML = mh; }
 
-  // State polling
+  bindFireControlEvents();
+
   function poll() { cmdToOverlay('GET_TICKET_COUNT'); }
   setInterval(poll, 1000);
   setTimeout(poll, 500);
 
-  // Setup XHR interception after DOM is ready
   setupXhrInterception();
 
-  // Listen for state updates
   window.addEventListener('message', function(ev) {
     if (ev.source !== window || !ev.data || !ev.data.__miaosha_overlay) return;
     var d = ev.data;
 
-    // Ticket count + TTL
     if (d.type === 'TICKET_COUNT') {
-      var c = (d.data && d.data.count) || d.count || 0;
-      var t = (d.data && d.data.ttl) || d.ttl || 0;
-      _ticketCount = c;
-      var plc = document.getElementById('_plc');
-      if (plc) plc.innerHTML = c + ' <span class="pl-t">' + (c > 0 && t > 0 ? '(' + Math.ceil(t/1000) + 's)' : '') + '</span>';
-      // Grid
-      var g = document.getElementById('_grid');
-      if (g) { var gh = ''; for (var i=0;i<10;i++) gh += '<div class="sl' + (i < c ? ' f' : '') + '">' + (i < c ? (i+1) : '') + '</div>'; g.innerHTML = gh; }
+      var ticketList = (d.data && d.data.tickets) || d.tickets || [];
+      _tickets = ticketList;
+      _ticketCount = (d.data && d.data.count) || d.count || 0;
+      renderCaptchaMeter();
       syncSelectionStatus();
     }
 
-    // Fire results
-    if (d.type === 'FIRE_RESULT') {
-      var lg = document.getElementById('_log');
-      if (lg) { lg.innerHTML += d.line + '<br>'; lg.scrollTop = lg.scrollHeight; }
-    }
-
-    // Sale time config → schedule auto-fire
     if (d.type === 'SALE_TIME_CONFIG' && d.data && d.data.nextSaleTime) {
       scheduleAutoFire(d.data.nextSaleTime);
     }
 
-    // Captcha config → update batch session limit
     if (d.type === 'CAPTCHA_CONFIG' && d.data) {
       var limit = Number(d.data.batchSessionLimit);
       if (limit > 0 && isFinite(limit)) {
         BATCH_SESSION_LIMIT = Math.round(limit);
       }
+      renderCaptchaMeter();
     }
 
-    // Runtime calibration (latency + clock offset) from multi-probe estimator
     if (d.type === 'RUNTIME_CALIBRATION' && d.data) {
-      var ok = applyRuntimeCalibration(d.data);
-      if (ok) {
-        var lgCal = document.getElementById('_log');
-        if (lgCal) {
-          var source = d.data.reason || 'runtime';
-          var samples = typeof d.data.sampleCount === 'number' ? d.data.sampleCount : 0;
-          lgCal.innerHTML += '> Runtime calibrated (' + source + '): L=' + _rt.latencyMs + 'ms O=' + _rt.clockOffsetMs + 'ms n=' + samples + '<br>';
-          lgCal.scrollTop = lgCal.scrollHeight;
-        }
-      }
+      applyRuntimeCalibration(d.data);
     }
 
-    // Batch preview data from extension storage (background alarm or page XHR)
     if (d.type === 'BATCH_PREVIEW_DATA' && d.data) {
+      if (!hasLocalAuthSignals()) {
+        _authFailed = true;
+        renderProductsAuthError();
+        return;
+      }
       _authFailed = false;
-      var banner = document.getElementById('_authBanner');
-      if (banner) banner.style.display = 'none';
       updateProductMatrix(d.data);
     }
 
-    // Stock cleared: any product transitioned soldOut true→false.
-    // Content script has already played 10 alarm beeps.
-    // Here: auto-select cleared products, persist, then fire if tickets ready.
-    if (d.type === 'SOLDOUT_CLEARED' && d.data) {
-      var clearedIds = d.data.clearedIds || [];
-      var lgSo = document.getElementById('_log');
-      var autoElSo = document.getElementById('_auto');
-      var tsSo = new Date().toISOString().slice(11, 23);
-
-      if (lgSo) {
-        lgSo.innerHTML += '> ⚡ STOCK CLEARED (' + clearedIds.length + (clearedIds.length !== 1 ? ' products' : ' product') + ') @ ' + tsSo + '<br>';
-        lgSo.scrollTop = lgSo.scrollHeight;
-      }
-
-      // Replace all selections with only the cleared products
-      _selectedProducts = {};
-      for (var ci = 0; ci < clearedIds.length; ci++) {
-        _selectedProducts[clearedIds[ci]] = true;
-      }
-      persistSelection();
-      renderProducts();
-      syncSelectionStatus();
-
-      if (autoElSo) { autoElSo.style.color = '#ef4444'; autoElSo.textContent = '⚡ STOCK CLEARED'; }
-
-      // Auto-fire after a short delay to let the PRODUCT_SELECTION_CHANGED storage write settle
-      var summarySo = getSelectionSummary();
-      if (summarySo.launchable > 0) {
-        if (lgSo) { lgSo.innerHTML += '> Auto-fire: soldout-cleared (' + summarySo.launchable + ' requests)<br>'; lgSo.scrollTop = lgSo.scrollHeight; }
-        if (autoElSo) autoElSo.textContent = '⚡ FIRING (soldout cleared)';
-        setTimeout(function() {
-          window.postMessage({ __miaosha_cmd: true, type: 'PREFIRE_FIRE', data: { startMs: Date.now(), reason: 'soldout-cleared' } }, '*');
-        }, 150);
-      } else {
-        if (lgSo) { lgSo.innerHTML += '> STOCK CLEARED — add captcha + select product to fire!<br>'; lgSo.scrollTop = lgSo.scrollHeight; }
-        if (autoElSo) autoElSo.textContent = '⚡ Waiting: add captcha + select product';
-      }
+    if (d.type === 'FIRE_CONFIG' && d.data) {
+      _fireConfig = d.data;
+      applyFireConfigToControls(d.data);
+      if (typeof renderFireConfig === 'function') renderFireConfig();
     }
 
-    // Burst fire success
     if (d.type === 'BURST_FIRE_SUCCESS' && d.data) {
       var autoEl = document.getElementById('_auto');
-      if (autoEl) autoEl.style.color = '#059669';
-      if (autoEl) autoEl.textContent = 'SUCCESS: bizId=' + (d.data.bizId || '?').slice(-8);
+      if (autoEl) { autoEl.style.color = '#059669'; autoEl.textContent = 'Native pay dialog opened · bizId=' + String(d.data.bizId || '?').slice(-8); }
     }
 
-    // Burst fire depleted
+    if (d.type === 'PAYMENT_STATE' && d.data) {
+      var autoElPs = document.getElementById('_auto');
+      if (autoElPs) {
+        if (d.data.status === 'success') { autoElPs.style.color = '#059669'; autoElPs.textContent = 'Payment confirmed'; }
+        else if (d.data.status === 'expired') { autoElPs.style.color = '#d97706'; autoElPs.textContent = 'Payment expired'; }
+        else if (d.data.status === 'timeout') { autoElPs.style.color = '#64748b'; autoElPs.textContent = 'Payment status timeout'; }
+      }
+    }
+
     if (d.type === 'BURST_FIRE_DEPLETED') {
       var autoElD = document.getElementById('_auto');
-      if (autoElD) autoElD.style.color = '#dc2626';
-      if (autoElD) autoElD.textContent = 'Depleted (' + (d.data && d.data.total || 0) + ' shots)';
+      if (autoElD) { autoElD.style.color = '#dc2626'; autoElD.textContent = 'Depleted (' + (d.data && d.data.total || 0) + ' shots)'; }
     }
 
-    // Prefire gate status (auth/ticket hard-stop reasons)
     if (d.type === 'PREFIRE_STATUS') {
       renderPrefireAuthStatus(d.data);
-      var lg2 = document.getElementById('_log');
-      if (lg2) {
-        if (d.data && d.data.ok) {
-          lg2.innerHTML += '> Prefire OK (' + (d.data.source || 'unknown') + ')<br>';
-        } else {
-          var why = d.data && d.data.reason ? d.data.reason : 'unknown';
-          lg2.innerHTML += '> Prefire blocked: ' + why + '<br>';
-        }
-        lg2.scrollTop = lg2.scrollHeight;
-      }
-    }
-
-    // Payment state
-    if (d.type === 'PAYMENT_STATE') {
-      var ps = document.getElementById('_pays');
-      var pt = document.getElementById('_payt');
-      var payDiv = document.getElementById('_pay');
-      var s = d.data.status;
-      if (ps) {
-        if (s === 'pending') { ps.textContent = 'SCANNING'; ps.className = 'ps s-b'; }
-        else if (s === 'success') { ps.textContent = 'PAID'; ps.className = 'ps s-g'; }
-        else if (s === 'error') { ps.textContent = 'ERROR'; ps.className = 'ps'; ps.style.cssText = 'background:#fef2f2;color:#dc2626;border:1px solid #fecaca'; }
-        else { ps.textContent = 'WAITING'; ps.className = 'ps sg'; }
-      }
-      if (pt) {
-        if (s === 'pending' && d.data.qrCode) {
-          pt.innerHTML = '<img class="pw-q" src="' + d.data.qrCode + '"/>' +
-            '<div class="pw-am">' + (d.data.amount ? '¥' + d.data.amount : '') + '</div>';
-        } else if (s === 'success') {
-          pt.innerHTML = '<div class="pw-am" style="color:#059669">&#10003; Paid</div>';
-        } else if (s === 'error') {
-          pt.innerHTML = '<div class="pw-am" style="color:#dc2626">' + (d.data.errorMsg || 'Error') + '</div>';
-        } else {
-          pt.innerHTML = 'Waiting for order data...';
-        }
-      }
     }
   });
 
-  // Buttons
   document.getElementById('_ab').addEventListener('click', function() { toggleBatchMode(); });
   document.getElementById('_fb').addEventListener('click', function() {
     window.postMessage({ __miaosha_cmd: true, type: 'PREFIRE_FIRE', data: { startMs: Date.now(), reason: 'manual' } }, '*');
-    var lg = document.getElementById('_log'); if (lg) lg.innerHTML += '> Manual prefire + fire…<br>';
   });
 
-  // Minimize
   document.getElementById('_mn').addEventListener('click', function() {
     var bd = document.getElementById('_bd');
     if (bd) { var h = bd.style.display === 'none'; bd.style.display = h ? 'block' : 'none'; this.innerHTML = h ? '&#8722;' : '+'; }
   });
 
-  // Drag
+  var optsBtn = document.getElementById('_opts');
+  if (optsBtn) {
+    optsBtn.addEventListener('click', function() {
+      window.postMessage({ __miaosha_cmd: true, type: 'OPEN_OPTIONS_PAGE' }, '*');
+    });
+  }
+
   (function() {
     var hd = overlay.querySelector('.h');
     var ox, oy, left, top, dragging = false;
@@ -278,52 +331,63 @@ function injectOverlay() {
 
   var wasAuthReady = false;
 
-  // ── Real state checking ──
   function checkRealState() {
-    // Cookie check
-    var hasCookie = document.cookie.indexOf('bigmodel_token_production') !== -1;
-    var ckEl = document.getElementById('_ck');
-    if (ckEl) { ckEl.className = 'pd ' + (hasCookie ? 'ok' : 'w'); }
-
-    // User Info check — requires auth token cookie AND org context (both needed for API auth)
+    var hasCookie = false;
     var hasUser = false;
     try {
+      hasCookie = document.cookie.indexOf('bigmodel_token_production') !== -1;
       hasUser = hasCookie &&
         !!localStorage.getItem('Bigmodel-Organization') &&
         !!localStorage.getItem('Bigmodel-Project');
-    } catch(e) {}
-    var uiEl = document.getElementById('_ui');
-    if (uiEl) { uiEl.className = 'pd ' + (hasUser ? 'ok' : 'w'); }
+    } catch (e) {}
 
-    // Auth transition (logged out -> logged in): trigger immediate product sync.
     var authReady = hasCookie && hasUser;
     if (authReady && !wasAuthReady) {
+      // Auth just became ready: event-driven product refresh, no independent polling.
+      renderProductsLoading();
+      loadBatchPreviewFromCache();
+      fetchBatchPreview();
       cmdToOverlay('REFRESH_BATCH_PREVIEW');
+
+      var totalProducts = 0;
+      try {
+        totalProducts = (_productMatrix.monthly || []).length +
+                        (_productMatrix.quarterly || []).length +
+                        (_productMatrix.yearly || []).length;
+      } catch (e) {}
+      if (typeof _h1_rt !== 'undefined') _h1_rt.hasProducts = totalProducts > 0;
+      if (typeof _h1_updateAuth === 'function') _h1_updateAuth();
+    }
+
+    if (!authReady && wasAuthReady) {
+      _productMatrix = { monthly: [], quarterly: [], yearly: [] };
+      _priorityList = [];
+      _ticketCount = 0;
+      _tickets = [];
+      try { sessionStorage.removeItem('bm_batch_preview'); } catch (e) {}
+      cmdToOverlay('CLEAR_BATCH_PREVIEW_CACHE');
+      cmdToOverlay('CLEAR_TICKET_POOL');
+      renderProductsAuthError();
+      renderFireConfig();
+      renderCaptchaMeter();
+      syncSelectionStatus();
+      if (typeof _h1_rt !== 'undefined') _h1_rt.hasProducts = false;
+      if (typeof _h1_updateAuth === 'function') _h1_updateAuth();
     }
     wasAuthReady = authReady;
 
-    // Auth banner — show when no cookie or API auth failure detected
-    var authBannerEl = document.getElementById('_authBanner');
-    if (authBannerEl) { authBannerEl.style.display = (!hasCookie || _authFailed) ? 'block' : 'none'; }
-
-    // Product ID check — ready only after product matrix is loaded.
-    var hasProductIds = getAllProducts().length > 0;
+    var hasSelectedProducts = _priorityList.length > 0;
     var piEl = document.getElementById('_pi');
-    if (piEl) { piEl.className = 'pd ' + (hasProductIds ? 'ok' : 'w'); }
+    if (piEl) { piEl.className = 'pd ' + (hasSelectedProducts ? 'ok' : 'w'); }
   }
 
-  // Check state immediately and every 3 seconds
   checkRealState();
   setInterval(checkRealState, 3000);
 
-  // Initial state poll
   setTimeout(poll, 200);
-  // Request sale time from isolated world (schedules auto-fire after response)
   setTimeout(function() { cmdToOverlay('GET_SALE_TIME'); }, 800);
-  // Request latest runtime calibration snapshot (latency + clock offset)
-  setTimeout(function() { cmdToOverlay('GET_RUNTIME_CALIBRATION'); }, 900);
+  setTimeout(function() { cmdToOverlay('GET_FIRE_CONFIG'); }, 1000);
 
-  // Setup product selector UI
   setTimeout(setupProductUI, 300);
 }
 

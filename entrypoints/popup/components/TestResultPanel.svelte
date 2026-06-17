@@ -35,14 +35,6 @@
   const bodyText = $derived(formatJson(result.body));
   const bodyHtml = $derived(highlightJson(bodyText));
   const headerEntries = $derived(Object.entries(result.headers));
-
-  // Debug: log body values
-  $effect(() => {
-    console.log('[TestResultPanel] result.body type:', typeof result.body);
-    console.log('[TestResultPanel] result.body:', result.body);
-    console.log('[TestResultPanel] bodyText:', bodyText?.substring(0, 200));
-    console.log('[TestResultPanel] bodyHtml length:', bodyHtml?.length);
-  });
 </script>
 
 <div class="result-panel">

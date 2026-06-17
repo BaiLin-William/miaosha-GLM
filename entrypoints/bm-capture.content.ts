@@ -2,30 +2,84 @@
 // Injects MAIN world XHR interceptor and relays payment/ticket data to WXT storage
 // Also implements R3: Tab Audio+Visual reminder when user is on bigmodel.cn
 import { storage } from '#imports';
-import { buildAutoFirePlan, type AutoFirePlanShot } from '../lib/api/fire-plan';
-import { calibrate } from '../lib/api/runtime-calibration';
-import { SALE_ALARM_MINUTES, getNextSaleTime, saleTimeStore, type SaleTimeConfig } from '../lib/settings/sale-time';
+import { buildStrikeQueue, replanStrikeQueue, type StrikePlan, type StrikeShot, type StrikeTarget } from '../lib/api/fire-plan';
+import { fireStore, FIRE_CONFIG_DEFAULT, type FireConfig } from '../lib/settings/fire';
+import { SALE_ALARM_MINUTES, SALE_TIME_DEFAULT, getNextSaleTime, saleTimeStore, type SaleTimeConfig } from '../lib/settings/sale-time';
 import { captchaStore } from '../lib/settings/captcha';
 
-const TICKET_KEY = 'local:ticketPool';
 const AUTH_KEY = 'local:authHeaders';
 const BATCH_PREVIEW_KEY = 'local:batchPreview';
-const RUNTIME_CALIBRATION_KEY = 'local:runtimeCalibration';
-const TICKET_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const CALIBRATION_FAST_WINDOW_MS = 10 * 60 * 1000;
-const CALIBRATION_NORMAL_WINDOW_MS = 60 * 60 * 1000;
-const CALIBRATION_FAST_INTERVAL_MS = 60 * 1000;
-const CALIBRATION_NORMAL_INTERVAL_MS = 3 * 60 * 1000;
-const CALIBRATION_IDLE_INTERVAL_MS = 10 * 60 * 1000;
-const EARLY_FIRE_BOUNDARY_MS = 5 * 60 * 1000;
+const TICKET_TTL_MS = 290 * 1000; // 290s per-ticket lifecycle
+let TICKET_POOL_MAX = 100; // synced with captchaConfig.batchSessionLimit (single source of truth)
 const REMINDER_PHASE_MINUTES_ASC = [...SALE_ALARM_MINUTES].sort((a, b) => a - b);
 
-interface RuntimeCalibrationSnapshot {
-  latencyMs: number;
-  clockOffsetMs: number;
-  sampleCount: number;
-  calibratedAt: number;
-  reason: string;
+const PHASE_BEEPS: Record<number, number> = {
+  60: 1,
+  30: 1,
+  15: 1,
+  10: 3,
+   5: 4,
+};
+
+// ── In-memory ticket pool, backed by page sessionStorage ──
+let _ticketPool: any[] = [];
+let _ticketStoreReadyPromise: Promise<void> | null = null;
+
+function ensureTicketStoreReady(): Promise<void> {
+  if (_ticketStoreReadyPromise) return _ticketStoreReadyPromise;
+  _ticketStoreReadyPromise = (async () => {
+    try {
+      const stored: any[] = await readPageTicketStore();
+      const now = Date.now();
+      _ticketPool = stored
+        .filter((t: any) => now - t.createdAt < TICKET_TTL_MS)
+        .sort((a: any, b: any) => a.createdAt - b.createdAt);
+      if (_ticketPool.length > TICKET_POOL_MAX) {
+        _ticketPool.splice(0, _ticketPool.length - TICKET_POOL_MAX);
+      }
+      writePageTicketStore();
+    } catch {
+      _ticketPool = [];
+    }
+  })();
+  return _ticketStoreReadyPromise;
+}
+
+function readPageTicketStore(): Promise<any[]> {
+  return new Promise((resolve) => {
+    const reqId = Math.random().toString(36).slice(2);
+    function handler(ev: MessageEvent) {
+      if (ev.source !== window || !ev.data?.__miaosha || ev.data.type !== 'TICKET_STORE_DATA' || ev.data.reqId !== reqId) return;
+      window.removeEventListener('message', handler);
+      resolve(ev.data.list || []);
+    }
+    window.addEventListener('message', handler);
+    window.postMessage({ __miaosha_cmd: true, type: 'READ_TICKET_STORE', reqId }, '*');
+    setTimeout(() => {
+      window.removeEventListener('message', handler);
+      resolve([]);
+    }, 800);
+  });
+}
+
+function writePageTicketStore() {
+  window.postMessage({ __miaosha_cmd: true, type: 'WRITE_TICKET_STORE', list: _ticketPool }, '*');
+}
+
+function clearPageTicketStore() {
+  _ticketPool = [];
+  window.postMessage({ __miaosha_cmd: true, type: 'CLEAR_TICKET_STORE' }, '*');
+}
+
+function isExtensionContextValid(): boolean {
+  try {
+    return !!(
+      (chrome?.runtime?.id && chrome?.storage?.local) ||
+      ((globalThis as any)?.browser?.runtime?.id && (globalThis as any)?.browser?.storage?.local)
+    );
+  } catch {
+    return false;
+  }
 }
 
 // ── R3: Flash Sale Reminder ──────────────────────────────────────────────────
@@ -36,15 +90,34 @@ interface ReminderState {
 }
 
 async function getSaleConfig(): Promise<SaleTimeConfig> {
-  return await saleTimeStore.get();
+  try {
+    if (!isExtensionContextValid()) return { ...SALE_TIME_DEFAULT };
+    return await saleTimeStore.get();
+  } catch {
+    return { ...SALE_TIME_DEFAULT };
+  }
+}
+
+async function syncCaptchaConfig(pushToOverlay = false) {
+  if (!isExtensionContextValid()) return;
+  try {
+    const cfg = await captchaStore.get();
+    const limit = Number(cfg.batchSessionLimit);
+    if (limit > 0 && isFinite(limit)) {
+      TICKET_POOL_MAX = Math.max(1, Math.round(limit));
+      if (pushToOverlay) {
+        postToOverlay({ type: 'CAPTCHA_CONFIG', data: { batchSessionLimit: TICKET_POOL_MAX } });
+      }
+    }
+  } catch {
+    // Extension context may have been invalidated; ignore.
+  }
 }
 
 function getSalePhase(config: SaleTimeConfig): number | null {
   const now = Date.now();
   const sale = getNextSaleTime(config);
   const remaining = sale - now;
-  // T-5 is still a reminder phase (it fires when probing stops).
-  // Stop showing reminders only once the sale epoch itself has passed.
   if (remaining <= 0) return null;
   for (const minutesBefore of REMINDER_PHASE_MINUTES_ASC) {
     if (remaining <= minutesBefore * 60 * 1000) return minutesBefore;
@@ -95,15 +168,20 @@ function createOverlay(min: number) {
   });
   document.getElementById('miaosha-open-btn')?.addEventListener('click', () => {
     overlay.remove();
-    chrome.runtime.sendMessage({ type: 'OPEN_POPUP' });
   });
+}
+
+function playBeeps(count: number) {
+  if (count <= 0) return;
+  for (let i = 0; i < count; i++) {
+    setTimeout(() => playBeep(), i * 350);
+  }
 }
 
 function playBeep() {
   try {
     const audioCtx = new AudioContext();
     if (audioCtx.state === 'suspended') {
-      // Chrome autoplay policy: cannot resume without user gesture. Silently skip.
       audioCtx.close();
       return;
     }
@@ -120,14 +198,6 @@ function playBeep() {
   } catch {}
 }
 
-/** Play `count` alarm beeps with 350 ms gaps. Used for soldOut-cleared alert. */
-async function playAlarmBeeps(count: number): Promise<void> {
-  for (let i = 0; i < count; i++) {
-    playBeep();
-    if (i < count - 1) await new Promise<void>((r) => setTimeout(r, 350));
-  }
-}
-
 function createReminderState(saleEpoch: number): ReminderState {
   return {
     reminded: Object.fromEntries(SALE_ALARM_MINUTES.map((minutesBefore) => [String(minutesBefore), false])),
@@ -137,7 +207,7 @@ function createReminderState(saleEpoch: number): ReminderState {
 
 async function loadReminderState(saleEpoch: number): Promise<ReminderState> {
   const defaultState = createReminderState(saleEpoch);
-  const stored = await storage.getItem<ReminderState>('local:reminderState');
+  const stored = await safeGet<ReminderState>('local:reminderState');
   if (!stored || stored.saleEpoch !== saleEpoch) return defaultState;
   return {
     ...defaultState,
@@ -150,7 +220,7 @@ async function loadReminderState(saleEpoch: number): Promise<ReminderState> {
 }
 
 async function saveReminderState(state: ReminderState) {
-  await storage.setItem('local:reminderState', state);
+  await safeSet('local:reminderState', state);
 }
 
 async function checkAndRemind() {
@@ -164,14 +234,15 @@ async function checkAndRemind() {
   if (state.reminded[key]) return;
 
   createOverlay(phase);
-  playBeep();
+  if (config.soundEnabled) {
+    playBeeps(PHASE_BEEPS[phase] ?? 1);
+  }
 
   state.reminded[key] = true;
   await saveReminderState(state);
 }
 
 async function initReminderLoop() {
-  // Check every 60 seconds
   setInterval(checkAndRemind, 60_000);
   await checkAndRemind();
 }
@@ -216,10 +287,6 @@ function removeForceStopBanner() {
   document.getElementById('miaosha-force-stop-banner')?.remove();
 }
 
-function isExpired(t: any): boolean {
-  return Date.now() - t.createdAt > TICKET_TTL_MS;
-}
-
 function postToOverlay(msg: any) {
   window.postMessage({ __miaosha_overlay: true, ...msg }, '*');
 }
@@ -232,6 +299,16 @@ function tokenSuffix(authz: string | undefined): string {
   if (!authz || typeof authz !== 'string') return '';
   const raw = authz.replace(/^Bearer\s+/i, '');
   return raw.slice(-6);
+}
+
+function maskTicket(ticket: string): string {
+  if (!ticket || typeof ticket !== 'string') return '';
+  if (ticket.length <= 8) return ticket;
+  return 'tk_…' + ticket.slice(-4);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export default defineContentScript({
@@ -247,9 +324,11 @@ export default defineContentScript({
 
     // ── Safe storage wrapper ──
     async function safeGet<T>(key: string): Promise<T | null> {
+      if (!isExtensionContextValid()) return null;
       try { return await storage.getItem<T>(key); } catch { return null; }
     }
     async function safeSet(key: string, value: any): Promise<void> {
+      if (!isExtensionContextValid()) return;
       try { await storage.setItem(key, value); } catch {}
     }
 
@@ -315,6 +394,7 @@ export default defineContentScript({
         return null;
       }
 
+      const t0 = performance.now();
       try {
         const res = await fetch('https://bigmodel.cn/api/biz/pay/batch-preview', {
           method: 'POST',
@@ -329,6 +409,9 @@ export default defineContentScript({
         });
 
         const data = await res.json();
+        const rttMs = Math.round(performance.now() - t0);
+        postToOverlay({ type: 'RUNTIME_CALIBRATION', data: { latencyMs: rttMs, calibratedAt: Date.now(), source: 'batch-preview' } });
+
         if (data?.code === 200 && data?.data?.productList) {
           await safeSet(BATCH_PREVIEW_KEY, data);
           return data.data.productList as any[];
@@ -339,211 +422,10 @@ export default defineContentScript({
       }
     }
 
-    let calibrationInFlight = false;
-    let calibrationTimer: ReturnType<typeof setTimeout> | null = null;
-
-    function selectCalibrationInterval(msUntilSale: number): number {
-      if (msUntilSale <= CALIBRATION_FAST_WINDOW_MS) return CALIBRATION_FAST_INTERVAL_MS;
-      if (msUntilSale <= CALIBRATION_NORMAL_WINDOW_MS) return CALIBRATION_NORMAL_INTERVAL_MS;
-      return CALIBRATION_IDLE_INTERVAL_MS;
-    }
-
-    async function pushRuntimeCalibrationToOverlay() {
-      const cached = await safeGet<RuntimeCalibrationSnapshot>(RUNTIME_CALIBRATION_KEY);
-      if (!cached) return false;
-      if (!Number.isFinite(cached.latencyMs) || !Number.isFinite(cached.clockOffsetMs)) return false;
-      postToOverlay({ type: 'RUNTIME_CALIBRATION', data: cached });
-      return true;
-    }
-
-    async function runRuntimeCalibration(reason: string) {
-      if (calibrationInFlight) return false;
-      calibrationInFlight = true;
-      try {
-        const authHeaders = await getFreshAuthHeaders();
-        if (!isAuthValid(authHeaders)) return false;
-
-        const result = await calibrate({
-          authorization: authHeaders.authorization,
-          bigmodelOrganization: authHeaders.bigmodelOrganization,
-          bigmodelProject: authHeaders.bigmodelProject,
-        });
-
-        if (!Number.isFinite(result.latencyMs) || !Number.isFinite(result.clockOffsetMs) || result.probes.length === 0) {
-          return false;
-        }
-
-        const snapshot: RuntimeCalibrationSnapshot = {
-          latencyMs: Math.max(0, Math.round(result.latencyMs)),
-          clockOffsetMs: Math.round(result.clockOffsetMs),
-          sampleCount: result.probes.length,
-          calibratedAt: Date.now(),
-          reason,
-        };
-
-        await safeSet(RUNTIME_CALIBRATION_KEY, snapshot);
-        postToOverlay({ type: 'RUNTIME_CALIBRATION', data: snapshot });
-        return true;
-      } catch {
-        return false;
-      } finally {
-        calibrationInFlight = false;
-      }
-    }
-
-    async function scheduleNextRuntimeCalibration() {
-      if (calibrationTimer) {
-        clearTimeout(calibrationTimer);
-        calibrationTimer = null;
-      }
-
-      try {
-        const cfg = await getSaleConfig();
-        const msUntilSale = Math.max(0, getNextSaleTime(cfg) - Date.now());
-        const nextDelay = selectCalibrationInterval(msUntilSale);
-        calibrationTimer = setTimeout(async () => {
-          await runRuntimeCalibration('periodic');
-          await scheduleNextRuntimeCalibration();
-        }, nextDelay);
-      } catch {
-        calibrationTimer = setTimeout(async () => {
-          await runRuntimeCalibration('periodic-fallback');
-          await scheduleNextRuntimeCalibration();
-        }, CALIBRATION_NORMAL_INTERVAL_MS);
-      }
-    }
-
-    async function startRuntimeCalibrationLoop() {
-      await pushRuntimeCalibrationToOverlay();
-      await runRuntimeCalibration('init');
-      await scheduleNextRuntimeCalibration();
-    }
-
-    // ── SoldOut Watcher: probes batch-preview starting at T-60m ──────────────
-    // Detects the moment any product transitions soldOut: true → false and fires
-    // a 10-beep alarm + SOLDOUT_CLEARED overlay event + optional immediate auto-fire.
-
-    let soldOutWatcherTimer: ReturnType<typeof setTimeout> | null = null;
-    let soldOutWatcherArmed = false;
-    let lastSoldOutMap: Record<string, boolean> | null = null;
-    let soldOutAlarmFired = false;
-
-    function getSoldOutProbeInterval(msUntilSale: number): number {
-      if (msUntilSale <= 15 * 60 * 1000) return 1000;  // T-15m → T-5m: every 1 s
-      if (msUntilSale <= 30 * 60 * 1000) return 2000;  // T-30m → T-15m: every 2 s
-      return 5000;                                      // T-60m → T-30m: every 5 s
-    }
-
-    /** Fetch batch-preview, update overlay/storage, return list of newly-cleared product IDs. */
-    async function runSoldOutProbe(): Promise<string[]> {
-      const authHeaders = await getFreshAuthHeaders();
-      if (!isAuthValid(authHeaders)) return [];
-      try {
-        const res = await fetch('https://bigmodel.cn/api/biz/pay/batch-preview', {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            'content-type': 'application/json;charset=UTF-8',
-            authorization: authHeaders.authorization,
-            'bigmodel-organization': authHeaders.bigmodelOrganization,
-            'bigmodel-project': authHeaders.bigmodelProject,
-          },
-          body: JSON.stringify({ invitationCode: '' }),
-        });
-        const data = await res.json();
-        if (data?.code !== 200 || !Array.isArray(data?.data?.productList)) return [];
-
-        const productList: any[] = data.data.productList;
-        // Keep storage + overlay up to date
-        await safeSet(BATCH_PREVIEW_KEY, data);
-        postToOverlay({ type: 'BATCH_PREVIEW_DATA', data: productList });
-
-        // Build current soldOut map
-        const currentMap: Record<string, boolean> = {};
-        for (const p of productList) {
-          currentMap[p.productId] = !!(p.soldOut || p.forbidden || p.canPurchase === false);
-        }
-
-        // Detect true → false transitions
-        const cleared: string[] = [];
-        if (lastSoldOutMap !== null) {
-          for (const id of Object.keys(currentMap)) {
-            if (lastSoldOutMap[id] === true && currentMap[id] === false) {
-              cleared.push(id);
-            }
-          }
-        }
-        lastSoldOutMap = currentMap;
-        return cleared;
-      } catch {
-        return [];
-      }
-    }
-
-    async function soldOutWatcherTick() {
-      if (!soldOutWatcherArmed || soldOutAlarmFired) return;
-
-      const cfg = await getSaleConfig();
-      const saleEpoch = getNextSaleTime(cfg);
-      const msUntilSale = saleEpoch - Date.now();
-
-      // T-5 is the hard boundary: stop all soldOut probing and earliest-fire checks.
-      if (msUntilSale <= EARLY_FIRE_BOUNDARY_MS) {
-        stopSoldOutWatcher();
-        return;
-      }
-
-      const cleared = await runSoldOutProbe();
-
-      if (cleared.length > 0) {
-        soldOutAlarmFired = true;
-        soldOutWatcherArmed = false;
-        // Play 10 alarm beeps (async, don't await — don't block fire path)
-        void playAlarmBeeps(10);
-        // Notify overlay: it will update selections + dispatch PREFIRE_FIRE if tickets ready
-        postToOverlay({ type: 'SOLDOUT_CLEARED', data: { clearedIds: cleared, detectedAt: Date.now() } });
-        return;
-      }
-
-      // Schedule next probe
-      if (soldOutWatcherArmed) {
-        if (soldOutWatcherTimer) clearTimeout(soldOutWatcherTimer);
-        soldOutWatcherTimer = setTimeout(soldOutWatcherTick, getSoldOutProbeInterval(Math.max(0, msUntilSale)));
-      }
-    }
-
-    function stopSoldOutWatcher() {
-      if (soldOutWatcherTimer) { clearTimeout(soldOutWatcherTimer); soldOutWatcherTimer = null; }
-      soldOutWatcherArmed = false;
-    }
-
-    async function startSoldOutWatcher() {
-      stopSoldOutWatcher();
-      lastSoldOutMap = null;
-      soldOutAlarmFired = false;
-
-      const cfg = await getSaleConfig();
-      const saleEpoch = getNextSaleTime(cfg);
-      const msUntilSale = saleEpoch - Date.now();
-      const WATCH_WINDOW_MS = 60 * 60 * 1000; // activate at T-60m
-
-      if (msUntilSale > WATCH_WINDOW_MS) {
-        // Schedule activation at T-60
-        soldOutWatcherTimer = setTimeout(async () => {
-          soldOutWatcherArmed = true;
-          await soldOutWatcherTick();
-        }, msUntilSale - WATCH_WINDOW_MS);
-      } else if (msUntilSale > EARLY_FIRE_BOUNDARY_MS) {
-        // Already inside the T-60 ~ T-5 early-fire window.
-        soldOutWatcherArmed = true;
-        await soldOutWatcherTick();
-      }
-      // else: already inside/past the T-5 cutoff — skip
-    }
-    // ── End SoldOut Watcher ───────────────────────────────────────────────────
-
     // ── Batch Preview bridge: storage → MAIN world ──
     async function pushBatchPreviewToOverlay() {
+      const authHeaders = await getFreshAuthHeaders();
+      if (!isAuthValid(authHeaders)) return false;
       const cached = await safeGet<any>(BATCH_PREVIEW_KEY);
       if (cached?.data?.productList) {
         postToOverlay({ type: 'BATCH_PREVIEW_DATA', data: cached.data.productList });
@@ -560,323 +442,404 @@ export default defineContentScript({
       }
       return false;
     }
-    // Push on init (after MAIN world script loads)
+
     pushBatchPreviewToOverlay().then((hasCached) => {
       if (!hasCached) {
         refreshBatchPreviewToOverlay();
       }
     });
-    // Push on storage change (background alarm wrote new data)
-    chrome.storage.onChanged.addListener((changes, area) => {
+
+    chrome.storage.onChanged.addListener(async (changes, area) => {
       if (area === 'local' && changes[BATCH_PREVIEW_KEY]) {
+        const authHeaders = await getFreshAuthHeaders();
+        if (!isAuthValid(authHeaders)) return;
         const newList = changes[BATCH_PREVIEW_KEY].newValue?.data?.productList;
         if (newList) postToOverlay({ type: 'BATCH_PREVIEW_DATA', data: newList });
       }
-      if (area === 'local' && (changes.saleTimeConfig || changes['local:saleTimeConfig'])) {
-        void scheduleNextRuntimeCalibration();
-        void startSoldOutWatcher(); // reset watcher when sale time changes
-      }
-      // Push captcha config to MAIN world when changed in options
       if (area === 'local' && changes['local:captchaConfig']) {
-        const cfg = changes['local:captchaConfig'].newValue;
-        if (cfg?.batchSessionLimit) {
-          postToOverlay({ type: 'CAPTCHA_CONFIG', data: { batchSessionLimit: cfg.batchSessionLimit } });
-        }
+        syncCaptchaConfig(true);
       }
     });
 
-    // ── Helper: get valid ticket count + oldest TTL ──
+    // ── Helper: get current valid ticket count / list ──
     async function getTicketInfo() {
-      const pool: any[] = (await safeGet<any[]>(TICKET_KEY)) ?? [];
-      const valid = pool.filter((t) => !isExpired(t));
-      if (valid.length !== pool.length) {
-        await safeSet(TICKET_KEY, valid);
-      }
-      const oldestTtl = valid.length > 0 ? Math.max(0, TICKET_TTL_MS - (Date.now() - valid[0].createdAt)) : 0;
-      return { count: valid.length, ttl: oldestTtl };
+      await ensureTicketStoreReady();
+      const now = Date.now();
+      _ticketPool = _ticketPool.filter((t: any) => now - t.createdAt < TICKET_TTL_MS);
+      const tickets = _ticketPool.map((t: any) => {
+        const remainingMs = Math.max(0, TICKET_TTL_MS - (now - t.createdAt));
+        return {
+          ticket: t.ticket,
+          randstr: t.randstr,
+          createdAt: t.createdAt,
+          remainingMs,
+          expired: false,
+        };
+      });
+      return { count: tickets.length, tickets };
     }
 
     async function getLaunchSnapshot() {
-      const pool: any[] = (await safeGet<any[]>(TICKET_KEY)) ?? [];
-      const valid = pool.filter((t) => !isExpired(t));
+      await ensureTicketStoreReady();
+      const now = Date.now();
+      const valid = _ticketPool.filter((t: any) => now - t.createdAt < TICKET_TTL_MS);
       const selData = await safeGet<any>('local:selectedProducts');
-      const selectedIds: string[] = selData?.selected
-        ? Object.keys(selData.selected).filter((k) => selData.selected[k])
-        : [];
-      return { valid, selectedIds };
+      const targets: StrikeTarget[] = (selData?.priorityList || [])
+        .filter((item: any) => item && item.productId)
+        .slice(0, 3)
+        .map((item: any, idx: number) => ({ productId: String(item.productId), priority: idx + 1 }));
+      let fireConfig: FireConfig;
+      try {
+        fireConfig = isExtensionContextValid() ? await fireStore.get() : { ...FIRE_CONFIG_DEFAULT };
+      } catch {
+        fireConfig = { ...FIRE_CONFIG_DEFAULT };
+      }
+      return { valid, targets, fireConfig };
     }
 
-    function consumeReservedTickets(pool: any[], reservedTickets: Array<{ ticket: string; createdAt: number }>) {
-      if (reservedTickets.length === 0) return pool;
-      const reservedKeys = new Set(reservedTickets.map((ticket) => ticket.ticket + ':' + ticket.createdAt));
-      return pool.filter((ticket) => !reservedKeys.has(ticket.ticket + ':' + ticket.createdAt));
-    }
-
-    function describeShot(shot: AutoFirePlanShot, idx: number, total: number) {
-      const waveTag = shot.wave === 'initial' ? 'initial' : 'follow-up';
-      return '>[#' + (idx + 1) + '/' + total + '][' + waveTag + '] ' + shot.productId.slice(-6);
-    }
-
-    function queueFireTimers(
-      shots: AutoFirePlanShot[],
+    // ── Poll payment status ──
+    async function pollPayCheck(
       authHeaders: any,
-      timers: ReturnType<typeof setTimeout>[],
-      state: { succeeded: boolean },
+      bizId: string,
+      onUpdate: (status: 'SUCCESS' | 'EXPIRE' | 'timeout') => void,
     ) {
-      const total = shots.length;
-
-      const cancelAll = () => {
-        for (const id of timers) clearTimeout(id);
-      };
-
-      const fireOne = async (shot: AutoFirePlanShot, idx: number) => {
-        if (state.succeeded) return;
-        const t1 = Date.now();
+      const MAX_MS = 5 * 60 * 1000;
+      const INTERVAL_MS = 1500;
+      const start = Date.now();
+      while (Date.now() - start < MAX_MS) {
         try {
-          const res = await fetch('https://bigmodel.cn/api/biz/pay/preview', {
-            method: 'POST',
+          const res = await fetch(`https://bigmodel.cn/api/biz/pay/check?bizId=${encodeURIComponent(bizId)}`, {
+            method: 'GET',
             credentials: 'include',
             headers: {
-              'content-type': 'application/json;charset=UTF-8',
-              'authorization': authHeaders.authorization,
+              authorization: authHeaders.authorization,
               'bigmodel-organization': authHeaders.bigmodelOrganization,
               'bigmodel-project': authHeaders.bigmodelProject,
             },
-            body: JSON.stringify({ productId: shot.productId, ticket: shot.ticket, randstr: shot.randstr }),
           });
-          const body = await res.json();
-          const rtt = Date.now() - t1;
-          const tag = describeShot(shot, idx, total);
-
-          if (body.code === 200 && body.data && !body.data.soldOut && body.data.bizId) {
-            state.succeeded = true;
-            cancelAll();
-            postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ORDER bizId=' + body.data.bizId + ' (' + rtt + 'ms)' });
-            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, wave: shot.wave, outcome: 'success', code: 200, rtt, bizId: body.data.bizId } });
-            const ps = {
-              bizId: body.data.bizId as string,
-              amount: (body.data.thirdPartyAmount ?? body.data.payAmount) as number,
-              productId: (body.data.productId ?? shot.productId) as string,
-              status: 'pending' as const,
-              updatedAt: Date.now(),
-            };
-            await safeSet('local:paymentState', ps);
-            postToOverlay({ type: 'BURST_FIRE_SUCCESS', data: ps });
-          } else if (body.code === 200 && body.data?.soldOut) {
-            postToOverlay({ type: 'FIRE_RESULT', line: tag + ': sold-out today (' + rtt + 'ms)' });
-            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, wave: shot.wave, outcome: 'soldout', code: 200, rtt } });
-          } else if (body.code === 555) {
-            postToOverlay({ type: 'FIRE_RESULT', line: tag + ': server-busy-555 (' + rtt + 'ms)' });
-            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, wave: shot.wave, outcome: 'busy', code: 555, rtt } });
-          } else {
-            postToOverlay({ type: 'FIRE_RESULT', line: tag + ': code=' + body.code + ' ' + (body.msg || '') + ' (' + rtt + 'ms)' });
-            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, wave: shot.wave, outcome: 'error', code: body.code, rtt } });
+          const data = await res.json();
+          const status = data?.data?.status ?? data?.data;
+          if (status === 'SUCCESS' || status === 'success' || status === true || data?.code === 200) {
+            onUpdate('SUCCESS');
+            return;
           }
-        } catch (e: any) {
-          postToOverlay({ type: 'FIRE_RESULT', line: describeShot(shot, idx, total) + ': net-err: ' + (e?.message || 'unknown') });
-          postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, wave: shot.wave, outcome: 'neterr' } });
-        }
-      };
-
-      for (let i = 0; i < shots.length; i++) {
-        const shot = shots[i];
-        const idx = i;
-        const delay = Math.max(0, shot.scheduledAt - Date.now());
-        timers.push(setTimeout(() => { void fireOne(shot, idx); }, delay));
+          if (status === 'EXPIRE' || status === 'expire' || status === 'FAILED' || status === 'failed') {
+            onUpdate('EXPIRE');
+            return;
+          }
+        } catch {}
+        await sleep(INTERVAL_MS);
       }
-
-      return cancelAll;
+      onUpdate('timeout');
     }
 
-    async function runAutoFirePlan(startMs: number, authHeaders: any) {
-      const { valid, selectedIds } = await getLaunchSnapshot();
-      if (valid.length === 0) {
-        postToOverlay({ type: 'FIRE_RESULT', line: '> No valid tickets' });
-        return;
-      }
-      if (selectedIds.length === 0) {
-        postToOverlay({ type: 'FIRE_RESULT', line: '> No products selected' });
-        return;
-      }
-
-      const plan = buildAutoFirePlan({ tickets: valid, selectedIds, startMs });
-      const allShots = [...plan.initialShots, ...plan.followUpShots];
-      if (allShots.length === 0) {
-        postToOverlay({ type: 'FIRE_RESULT', line: '> Auto-fire plan empty' });
-        return;
-      }
-
-      const remainingPool = consumeReservedTickets(valid, plan.reservedTickets);
-      await safeSet(TICKET_KEY, remainingPool);
-      const remainingInfo = await getTicketInfo();
-      postToOverlay({ type: 'TICKET_COUNT', count: remainingInfo.count, ttl: remainingInfo.ttl });
-      try { chrome.runtime.sendMessage({ type: 'TICKET_POOL_UPDATED', count: remainingInfo.count }); } catch {}
-
-      if (valid.length < selectedIds.length) {
-        postToOverlay({
-          type: 'FIRE_RESULT',
-          line: '> Auto initial partial: ' + valid.length + ' tickets for ' + selectedIds.length + ' selected products',
-        });
-      }
-
-      postToOverlay({
-        type: 'FIRE_RESULT',
-        line: '> Auto plan: initial ' + plan.initialShots.length + ' concurrent + follow-up ' + plan.followUpShots.length + ' randomized expiry-safe shots',
-      });
-
-      postToOverlay({
-        type: 'FIRE_BATCH_START',
-        data: {
-          queue: allShots.map((shot, idx) => ({ shotIdx: idx, productId: shot.productId, wave: shot.wave, scheduledAt: shot.scheduledAt })),
-          totalShots: allShots.length,
-          startMs,
-          initialCount: plan.initialShots.length,
-          followUpCount: plan.followUpShots.length,
-        },
-      });
-
-      const timers: ReturnType<typeof setTimeout>[] = [];
-      const state = { succeeded: false };
-      const cancelAll = queueFireTimers(allShots, authHeaders, timers, state);
-      const lastScheduledAt = allShots.reduce((latest, shot) => Math.max(latest, shot.scheduledAt), startMs);
-
-      timers.push(setTimeout(() => {
-        if (!state.succeeded) {
-          cancelAll();
-          postToOverlay({ type: 'FIRE_RESULT', line: '> Auto plan complete — ammo depleted (' + allShots.length + ' shots)' });
-          postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total: allShots.length } });
-        }
-      }, Math.max(0, lastScheduledAt - Date.now()) + 1000));
+    async function updatePaymentState(patch: any) {
+      const current = await safeGet<any>('local:paymentState');
+      const next = { ...(current || {}), ...patch, updatedAt: Date.now() };
+      await safeSet('local:paymentState', next);
+      postToOverlay({ type: 'PAYMENT_STATE', data: next });
     }
 
-    // ── Burst Fire: sequential 50ms-interval launching ──
-    // startMs = absolute epoch ms when first shot should fire (pass Date.now() for immediate)
-    // API ground-truth: code=200+bizId+!soldOut → SUCCESS; code=555 → server busy (continue);
-    // code=500 → bad ticket (continue); code=200+soldOut → quota reached (continue)
-    async function burstFire(startMs: number, authOverride?: any) {
-      const { valid, selectedIds } = await getLaunchSnapshot();
-      if (valid.length === 0) {
-        postToOverlay({ type: 'FIRE_RESULT', line: '> No valid tickets' });
-        return;
-      }
+    // ── Unified strike: preload → strike → native pay ──
+    let currentStrikeCancel: (() => void) | null = null;
 
+    async function strike(startMs: number, authOverride?: any) {
       const authHeaders = isAuthValid(authOverride) ? authOverride : await getFreshAuthHeaders();
       if (!isAuthValid(authHeaders)) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> No auth headers' });
         return;
       }
-      if (selectedIds.length === 0) {
+
+      const { valid, targets, fireConfig } = await getLaunchSnapshot();
+      if (valid.length === 0) {
+        postToOverlay({ type: 'FIRE_RESULT', line: '> No valid tickets' });
+        return;
+      }
+      if (targets.length === 0) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> No products selected' });
         return;
       }
 
-      const launchCount = Math.min(valid.length, selectedIds.length);
-      if (valid.length < selectedIds.length) {
-        postToOverlay({
-          type: 'FIRE_RESULT',
-          line: '> Ammo short: ' + valid.length + ' tickets for ' + selectedIds.length + ' selected products; only ' + launchCount + ' requests can be sent',
-        });
+      const originalTargets = targets.slice(0, 3);
+      const plan = buildStrikeQueue({ tickets: valid, targets: originalTargets, allocation: fireConfig.allocation });
+      if (plan.shots.length === 0) {
+        postToOverlay({ type: 'FIRE_RESULT', line: '> Strike queue empty' });
+        return;
       }
 
-      // Build flat queue: one ticket+randstr is consumed by one selected product.
-      // The number of requests is capped by the smaller of ticket count and selected product count.
-      const queue: Array<{ ticket: string; randstr: string; productId: string }> = [];
-      for (let i = 0; i < launchCount; i++) {
-        const ticket = valid[i];
-        queue.push({ ticket: ticket.ticket, randstr: ticket.randstr, productId: selectedIds[i] });
-      }
-
-      // Consume only the tickets used by this burst; preserve unused tickets for the next run.
-      await safeSet(TICKET_KEY, valid.slice(launchCount));
+      // Consume all tickets used in this strike.
+      const usedKeys = new Set(plan.shots.map((s) => s.ticket + ':' + s.randstr + ':' + s.createdAt));
+      _ticketPool = _ticketPool.filter((t: any) => !usedKeys.has(t.ticket + ':' + t.randstr + ':' + t.createdAt));
+      writePageTicketStore();
       const remainingInfo = await getTicketInfo();
-      postToOverlay({ type: 'TICKET_COUNT', count: remainingInfo.count, ttl: remainingInfo.ttl });
-      try { chrome.runtime.sendMessage({ type: 'TICKET_POOL_UPDATED', count: remainingInfo.count }); } catch {}
+      postToOverlay({ type: 'TICKET_COUNT', count: remainingInfo.count, tickets: remainingInfo.tickets });
+
+      const burstIntervalMs = Math.max(50, Math.round(fireConfig.burstIntervalMs) || 2100);
+      const maxBackoffMs = Math.max(burstIntervalMs, Math.round(fireConfig.maxBackoffMs) || 4000);
+      const backoff500Ms = Math.max(0, Math.round(fireConfig.backoff500Ms) || 1200);
+      const backoff555Ms = Math.max(0, Math.round(fireConfig.backoff555Ms) || 200);
+      const soldoutStopThreshold = Math.max(1, Math.round(fireConfig.soldoutStopThreshold) || 2);
+      const enableDynamicSwitch = fireConfig.enableDynamicSwitch !== false;
 
       postToOverlay({
         type: 'FIRE_RESULT',
-        line: '> Burst: ' + queue.length + ' requests @ 50ms intervals' + (remainingInfo.count > 0 ? ' (' + remainingInfo.count + ' tickets kept)' : ''),
+        line: `> Strike ${plan.shots.length} shots · allocation [${plan.allocation.join('/')}]`,
       });
-
-      // ── Notify fire-viz overlay: burst is starting (D+C visualization) ──
       postToOverlay({
         type: 'FIRE_BATCH_START',
         data: {
-          queue: queue.map((item, idx) => ({ shotIdx: idx, productId: item.productId })),
-          totalShots: queue.length,
+          queue: plan.shots.map((shot) => ({
+            shotIdx: shot.shotIndex,
+            productId: shot.productId,
+            priority: shot.priority,
+            ticketMask: maskTicket(shot.ticket),
+          })),
+          totalShots: plan.shots.length,
           startMs,
+          mode: fireConfig.mode === 'manual' ? 'manual' : 'auto',
+          burstIntervalMs,
+          firstShotOffsetMs: fireConfig.firstShotOffsetMs,
+          staggerWindowMs: fireConfig.staggerWindowMs,
+          allocation: plan.allocation,
+          enableDynamicSwitch,
         },
       });
 
+      const previewAbortCtrl = new AbortController();
+      let cancelled = false;
       const timers: ReturnType<typeof setTimeout>[] = [];
+
+      const cancelAll = () => {
+        if (cancelled) return;
+        cancelled = true;
+        currentStrikeCancel = null;
+        previewAbortCtrl.abort();
+        for (const id of timers) clearTimeout(id);
+        timers.length = 0;
+      };
+      currentStrikeCancel = cancelAll;
+
+      const total = plan.shots.length;
       let succeeded = false;
 
-      const cancelAll = () => { for (const id of timers) clearTimeout(id); };
+      // ── Strategy state ──
+      let shots: StrikeShot[] = plan.shots.slice();
+      let aliveTargets: StrikeTarget[] = plan.targets.slice();
+      const deprioritized = new Set<string>();
+      let currentInterval = burstIntervalMs;
+      let consec500 = 0;
+      let consec555 = 0;
+      const soldoutCounts = new Map<string, number>();
+      const firedByTarget = new Map<string, number>();
+      const allocatedByTarget = new Map<string, number>();
+      for (const t of originalTargets) {
+        const count = shots.filter((s) => s.productId === t.productId).length;
+        allocatedByTarget.set(t.productId, count);
+      }
 
-      const fireOne = async (item: { ticket: string; randstr: string; productId: string }, idx: number) => {
-        if (succeeded) return;
+      function emitAllocationUpdate(reason?: string) {
+        const targetsData = originalTargets.map((t) => {
+          const allocated = allocatedByTarget.get(t.productId) || 0;
+          const fired = firedByTarget.get(t.productId) || 0;
+          const remaining = shots.filter((s) => s.productId === t.productId).length;
+          return { productId: t.productId, priority: t.priority, allocated, fired, remaining };
+        });
+        postToOverlay({ type: 'FIRE_ALLOCATION_UPDATE', data: { targets: targetsData, reason } });
+      }
+
+      function applyBackoff(previous: number, added: number): number {
+        return Math.min(maxBackoffMs, previous + added);
+      }
+
+      function resetBackoff() {
+        if (currentInterval !== burstIntervalMs) {
+          const prev = currentInterval;
+          currentInterval = burstIntervalMs;
+          consec500 = 0;
+          consec555 = 0;
+          postToOverlay({
+            type: 'FIRE_BACKOFF_UPDATE',
+            data: { currentInterval, previousInterval: prev, addedMs: 0, reason: 'reset' },
+          });
+        }
+      }
+
+      function handleSoldout(shot: StrikeShot) {
+        const count = (soldoutCounts.get(shot.productId) || 0) + 1;
+        soldoutCounts.set(shot.productId, count);
+        if (count >= soldoutStopThreshold) {
+          const removedIdx = aliveTargets.findIndex((t) => t.productId === shot.productId);
+          if (removedIdx >= 0) {
+            const removed = aliveTargets.splice(removedIdx, 1)[0];
+            deprioritized.delete(removed.productId);
+            const nextPrimary = aliveTargets[0];
+            postToOverlay({
+              type: 'FIRE_TARGET_SWITCH',
+              data: {
+                fromProductId: removed.productId,
+                toProductId: nextPrimary?.productId || '',
+                reason: 'soldout',
+              },
+            });
+            postToOverlay({
+              type: 'FIRE_RESULT',
+              line: `> Target switch: ${removed.productId.slice(-6)} soldout → ${nextPrimary ? nextPrimary.productId.slice(-6) : 'none'}`,
+            });
+            if (enableDynamicSwitch && aliveTargets.length > 0 && shots.length > 0) {
+              const replanned = replanStrikeQueue(shots, aliveTargets, plan.allocation);
+              shots = replanned.shots;
+              // Recount allocations
+              for (const t of originalTargets) allocatedByTarget.set(t.productId, 0);
+              for (const t of aliveTargets) {
+                allocatedByTarget.set(t.productId, shots.filter((s) => s.productId === t.productId).length);
+              }
+              emitAllocationUpdate('replan');
+            }
+          }
+        }
+      }
+
+      const fireOne = async (shot: StrikeShot, idx: number): Promise<string> => {
+        if (cancelled) return 'cancelled';
+        const tag = '>[#' + (idx + 1) + '/' + total + '][P' + shot.priority + '] ' + shot.productId.slice(-6);
         const t1 = Date.now();
         try {
           const res = await fetch('https://bigmodel.cn/api/biz/pay/preview', {
             method: 'POST',
+            signal: previewAbortCtrl.signal,
             credentials: 'include',
             headers: {
               'content-type': 'application/json;charset=UTF-8',
-              'authorization': authHeaders.authorization,
+              authorization: authHeaders.authorization,
               'bigmodel-organization': authHeaders.bigmodelOrganization,
               'bigmodel-project': authHeaders.bigmodelProject,
             },
-            body: JSON.stringify({ productId: item.productId, ticket: item.ticket, randstr: item.randstr }),
+            body: JSON.stringify({ productId: shot.productId, ticket: shot.ticket, randstr: shot.randstr }),
           });
+          if (cancelled) return 'cancelled';
           const body = await res.json();
           const rtt = Date.now() - t1;
-          const tag = '>[#' + (idx + 1) + '/' + queue.length + '] ' + item.productId.slice(-6);
+
+          firedByTarget.set(shot.productId, (firedByTarget.get(shot.productId) || 0) + 1);
 
           if (body.code === 200 && body.data && !body.data.soldOut && body.data.bizId) {
-            // ── SUCCESS: valid bizId returned ──
             succeeded = true;
             cancelAll();
-            postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ORDER bizId=' + body.data.bizId + ' (' + rtt + 'ms)' });
-            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: item.productId, outcome: 'success', code: 200, rtt, bizId: body.data.bizId } });
+            const bizId = body.data.bizId as string;
+            const amount = (body.data.thirdPartyAmount ?? body.data.payAmount) as number;
+            const productId = (body.data.productId ?? shot.productId) as string;
             const ps = {
-              bizId: body.data.bizId as string,
-              amount: (body.data.thirdPartyAmount ?? body.data.payAmount) as number,
-              productId: (body.data.productId ?? item.productId) as string,
+              bizId,
+              amount,
+              productId,
+              qrCode: body.data.qrCode || null,
+              payType: fireConfig.payType,
               status: 'pending' as const,
               updatedAt: Date.now(),
             };
-            await safeSet('local:paymentState', ps);
+            await updatePaymentState(ps);
             postToOverlay({ type: 'BURST_FIRE_SUCCESS', data: ps });
+            postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ORDER bizId=' + bizId + ' (' + rtt + 'ms)' });
+            postToOverlay({
+              type: 'FIRE_SHOT_RESULT',
+              data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'success', code: 200, rtt, sentAt: t1, bizId, ticketMask: maskTicket(shot.ticket), serverMsg: '' },
+            });
+            void pollPayCheck(authHeaders, bizId, (status) => {
+              if (status === 'SUCCESS') {
+                void updatePaymentState({ status: 'success' });
+                postToOverlay({ type: 'STRIKE_PAYMENT_SUCCESS', data: { bizId, orderId: bizId } });
+                postToOverlay({ type: 'FIRE_RESULT', line: '> Payment confirmed bizId=' + String(bizId).slice(-8) });
+              } else if (status === 'EXPIRE') {
+                void updatePaymentState({ status: 'expired' });
+                postToOverlay({ type: 'STRIKE_PAYMENT_EXPIRED', data: { bizId, orderId: bizId } });
+                postToOverlay({ type: 'FIRE_RESULT', line: '> Payment expired bizId=' + String(bizId).slice(-8) });
+              } else {
+                void updatePaymentState({ status: 'timeout' });
+                postToOverlay({ type: 'STRIKE_PAYMENT_TIMEOUT', data: { bizId, orderId: bizId } });
+                postToOverlay({ type: 'FIRE_RESULT', line: '> Payment status timeout bizId=' + String(bizId).slice(-8) });
+              }
+            });
+            return 'success';
           } else if (body.code === 200 && body.data?.soldOut) {
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': sold-out today (' + rtt + 'ms)' });
-            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: item.productId, outcome: 'soldout', code: 200, rtt } });
+            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'soldout', code: 200, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), serverMsg: body.msg || 'sold out' } });
+            handleSoldout(shot);
+            return 'soldout';
           } else if (body.code === 555) {
+            consec555++;
+            consec500 = 0;
+            deprioritized.add(shot.productId);
+            const prev = currentInterval;
+            currentInterval = applyBackoff(currentInterval, backoff555Ms);
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': server-busy-555 (' + rtt + 'ms)' });
-            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: item.productId, outcome: 'busy', code: 555, rtt } });
+            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'busy', code: 555, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), serverMsg: body.msg || 'server busy' } });
+            postToOverlay({
+              type: 'FIRE_BACKOFF_UPDATE',
+              data: { currentInterval, previousInterval: prev, addedMs: backoff555Ms, reason: '555-rate' },
+            });
+            return 'busy';
           } else {
+            const isVerifyOverload = body.code === 500 && typeof body.msg === 'string' && body.msg.includes('验证码校验服务异常');
+            if (isVerifyOverload) {
+              consec500++;
+              consec555 = 0;
+              const prev = currentInterval;
+              currentInterval = applyBackoff(currentInterval, backoff500Ms);
+              postToOverlay({
+                type: 'FIRE_BACKOFF_UPDATE',
+                data: { currentInterval, previousInterval: prev, addedMs: backoff500Ms, reason: '500-verify' },
+              });
+            } else {
+              resetBackoff();
+            }
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': code=' + body.code + ' ' + (body.msg || '') + ' (' + rtt + 'ms)' });
-            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: item.productId, outcome: 'error', code: body.code, rtt } });
+            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'error', code: body.code, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), serverMsg: body.msg || '' } });
+            return 'error';
           }
         } catch (e: any) {
-          postToOverlay({ type: 'FIRE_RESULT', line: '>[#' + (idx + 1) + '] net-err: ' + (e?.message || 'unknown') });
-          postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: item.productId, outcome: 'neterr' } });
+          if (e?.name === 'AbortError' || cancelled) return 'cancelled';
+          resetBackoff();
+          postToOverlay({ type: 'FIRE_RESULT', line: tag + ': net-err: ' + (e?.message || 'unknown') });
+          postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'neterr', rtt: Date.now() - t1, sentAt: t1, ticketMask: maskTicket(shot.ticket), serverMsg: e?.message || 'unknown' } });
+          return 'neterr';
         }
       };
 
-      const INTERVAL_MS = 50;
       const baseDelay = Math.max(0, startMs - Date.now());
-      for (let i = 0; i < queue.length; i++) {
-        const item = queue[i];
-        const idx = i;
-        timers.push(setTimeout(() => { fireOne(item, idx); }, baseDelay + idx * INTERVAL_MS));
-      }
+      let firstShotFired = false;
 
-      // After last shot + 1s response window, report depletion if still no success
-      timers.push(setTimeout(() => {
-        if (!succeeded) {
-          postToOverlay({ type: 'FIRE_RESULT', line: '> Burst complete — ammo depleted (' + queue.length + ' shots)' });
-          postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total: queue.length } });
+      const scheduleNext = () => {
+        if (cancelled || succeeded || shots.length === 0) {
+          if (!succeeded && !cancelled) {
+            cancelAll();
+            const fired = total - shots.length;
+            postToOverlay({ type: 'FIRE_RESULT', line: '> Strike complete — ammo depleted (' + fired + '/' + total + ' shots)' });
+            postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total: fired } });
+          }
+          return;
         }
-      }, baseDelay + (queue.length - 1) * INTERVAL_MS + 1000));
+
+        const shot = shots.shift()!;
+        const idx = shot.shotIndex;
+        const isFirst = !firstShotFired;
+        firstShotFired = true;
+        const delay = isFirst ? baseDelay : currentInterval;
+
+        timers.push(
+          setTimeout(async () => {
+            const outcome = await fireOne(shot, idx);
+            if (outcome === 'success' || cancelled || succeeded) return;
+            // Reset backoff when we leave the rate-limit / verify-overload paths.
+            if (outcome !== 'busy' && outcome !== 'error') {
+              resetBackoff();
+            }
+            scheduleNext();
+          }, delay),
+        );
+      };
+
+      emitAllocationUpdate('start');
+      scheduleNext();
     }
 
     async function prefireAndBurst(startMs: number, reason: string) {
@@ -908,12 +871,7 @@ export default defineContentScript({
         },
       });
 
-      if (reason === 'auto') {
-        await runAutoFirePlan(startMs, authStatus.headers);
-        return;
-      }
-
-      await burstFire(startMs, authStatus.headers);
+      await strike(startMs, authStatus.headers);
     }
 
     // ── Listen for messages from MAIN world script ──
@@ -924,45 +882,93 @@ export default defineContentScript({
       if (event.data?.__miaosha_cmd) {
         if (event.data.type === 'GET_TICKET_COUNT') {
           const info = await getTicketInfo();
-          postToOverlay({ type: 'TICKET_COUNT', count: info.count, ttl: info.ttl });
+          postToOverlay({ type: 'TICKET_COUNT', count: info.count, tickets: info.tickets });
         }
-        if (event.data.type === 'FIRE_ALL') {
-          // Manual fire: start immediately
-          prefireAndBurst(Date.now(), 'legacy-fire-all');
-        }
-        if (event.data.type === 'BURST_FIRE') {
-          // Auto-fire from scheduler: startMs pre-computed by bm-main.js
-          const startMs: number = (event.data.data?.startMs) ?? Date.now();
-          prefireAndBurst(startMs, event.data.data?.reason ?? 'burst-fire');
-        }
-        // Unified pre-fire gate (manual + auto)
         if (event.data.type === 'PREFIRE_FIRE') {
           const startMs: number = (event.data.data?.startMs) ?? Date.now();
           const reason: string = event.data.data?.reason ?? 'prefire-fire';
           prefireAndBurst(startMs, reason);
         }
-        // Auto-fire scheduler requests sale time from bm-main.js
         if (event.data.type === 'GET_SALE_TIME') {
           const cfg = await getSaleConfig();
           const nst = getNextSaleTime(cfg);
           postToOverlay({ type: 'SALE_TIME_CONFIG', data: { config: cfg, nextSaleTime: nst } });
         }
-        if (event.data.type === 'GET_RUNTIME_CALIBRATION') {
-          const pushed = await pushRuntimeCalibrationToOverlay();
-          if (!pushed) {
-            await runRuntimeCalibration('manual-request');
+        if (event.data.type === 'GET_FIRE_CONFIG') {
+          try {
+            const cfg = isExtensionContextValid() ? await fireStore.get() : { ...FIRE_CONFIG_DEFAULT };
+            postToOverlay({ type: 'FIRE_CONFIG', data: cfg });
+          } catch {
+            postToOverlay({ type: 'FIRE_CONFIG', data: { ...FIRE_CONFIG_DEFAULT } });
           }
         }
-        // MAIN world requests batch preview data from storage
+        if (event.data.type === 'SET_FIRE_CONFIG' && event.data.data) {
+          const incoming = event.data.data;
+          let current: FireConfig;
+          try {
+            current = isExtensionContextValid() ? await fireStore.get() : { ...FIRE_CONFIG_DEFAULT };
+          } catch {
+            current = { ...FIRE_CONFIG_DEFAULT };
+          }
+          function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+            const n = Math.round(Number(value));
+            return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
+          }
+          function normalizeIncomingAllocation(value: unknown): number[] {
+            if (!Array.isArray(value)) return current.allocation;
+            const nums = value.slice(0, 3).map((v) => {
+              const n = Math.round(Number(v));
+              return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
+            });
+            const sum = nums.reduce((a, b) => a + b, 0);
+            if (sum === 0) return current.allocation;
+            if (sum === 100) return nums;
+            const normalized = nums.map((v) => Math.round((v / sum) * 100));
+            const normSum = normalized.reduce((a, b) => a + b, 0);
+            if (normSum !== 100 && normalized[0] != null) normalized[0] += 100 - normSum;
+            return normalized;
+          }
+
+          const next: FireConfig = {
+            mode: incoming.mode === 'manual' ? 'manual' : 'auto',
+            payType: incoming.payType === 'WE_CHAT' ? 'WE_CHAT' : 'ALI',
+            burstIntervalMs: Number.isFinite(Number(incoming.burstIntervalMs))
+              ? Math.max(50, Math.round(Number(incoming.burstIntervalMs)))
+              : current.burstIntervalMs,
+
+            firstShotOffsetMs: clampNumber(incoming.firstShotOffsetMs, -5000, 5000, current.firstShotOffsetMs),
+            staggerWindowMs: clampNumber(incoming.staggerWindowMs, 0, 3000, current.staggerWindowMs),
+            allocation: normalizeIncomingAllocation(incoming.allocation),
+            backoff500Ms: clampNumber(incoming.backoff500Ms, 500, 5000, current.backoff500Ms),
+            backoff555Ms: clampNumber(incoming.backoff555Ms, 0, 2000, current.backoff555Ms),
+            maxBackoffMs: clampNumber(incoming.maxBackoffMs, 2100, 8000, current.maxBackoffMs),
+            soldoutStopThreshold: clampNumber(incoming.soldoutStopThreshold, 1, 5, current.soldoutStopThreshold),
+            enableDynamicSwitch: typeof incoming.enableDynamicSwitch === 'boolean' ? incoming.enableDynamicSwitch : current.enableDynamicSwitch,
+          };
+          try {
+            if (isExtensionContextValid()) await fireStore.set(next);
+          } catch {}
+          postToOverlay({ type: 'FIRE_CONFIG', data: next });
+        }
+        if (event.data.type === 'OPEN_OPTIONS_PAGE') {
+          try { chrome.runtime.sendMessage({ type: 'OPEN_OPTIONS_PAGE' }); } catch {}
+        }
         if (event.data.type === 'REQUEST_BATCH_PREVIEW') {
           const pushed = await pushBatchPreviewToOverlay();
           if (!pushed) {
             await refreshBatchPreviewToOverlay();
           }
         }
-        // Force refresh (used by regression gate and manual recovery)
         if (event.data.type === 'REFRESH_BATCH_PREVIEW') {
           await refreshBatchPreviewToOverlay();
+        }
+        if (event.data.type === 'CLEAR_BATCH_PREVIEW_CACHE') {
+          try { await chrome.storage.local.remove(BATCH_PREVIEW_KEY); } catch {}
+        }
+        if (event.data.type === 'CLEAR_TICKET_POOL') {
+          clearPageTicketStore();
+          const info = await getTicketInfo();
+          postToOverlay({ type: 'TICKET_COUNT', count: info.count, tickets: info.tickets });
         }
       }
 
@@ -970,61 +976,36 @@ export default defineContentScript({
       if (!event.data?.__miaosha) return;
       const { type, payload } = event.data;
 
-      // ── Product selection changed ──
       if (type === 'PRODUCT_SELECTION_CHANGED' && payload) {
         await safeSet('local:selectedProducts', payload);
       }
 
-      // ── Captcha ticket produced ──
       if (type === 'CAPTCHA_PRODUCED' && payload?.ticket) {
-        const pool: any[] = (await safeGet<any[]>(TICKET_KEY)) ?? [];
-        if (!pool.some((t: any) => t.ticket === payload.ticket)) {
-          pool.push({ ticket: payload.ticket, randstr: payload.randstr, createdAt: Date.now() });
-          await safeSet(TICKET_KEY, pool);
+        await ensureTicketStoreReady();
+        if (!_ticketPool.some((t: any) => t.ticket === payload.ticket)) {
+          const now = Date.now();
+          _ticketPool.push({ ticket: payload.ticket, randstr: payload.randstr, createdAt: now });
+          _ticketPool = _ticketPool
+            .filter((t: any) => now - t.createdAt < TICKET_TTL_MS)
+            .sort((a: any, b: any) => a.createdAt - b.createdAt);
+          if (_ticketPool.length > TICKET_POOL_MAX) {
+            _ticketPool.splice(0, _ticketPool.length - TICKET_POOL_MAX);
+          }
+          writePageTicketStore();
         }
-        // Update overlay
         const info = await getTicketInfo();
-        postToOverlay({ type: 'TICKET_COUNT', count: info.count, ttl: info.ttl });
-        // Notify popup
-        try { chrome.runtime.sendMessage({ type: 'TICKET_POOL_UPDATED', count: info.count }); } catch {}
+        postToOverlay({ type: 'TICKET_COUNT', count: info.count, tickets: info.tickets });
       }
 
       if (type === 'CAPTCHA_ERROR' && payload) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> Captcha error: ' + payload.msg });
-        try { chrome.runtime.sendMessage({ type: 'CAPTCHA_ERROR', msg: payload.msg }); } catch {}
       }
 
-      // ── Batch mode status → full-width force-stop banner ──
       if (type === 'BATCH_MODE_STATUS') {
         if (payload?.active) {
           createForceStopBanner();
         } else {
           removeForceStopBanner();
-        }
-      }
-
-      // ── Payment preview intercepted ──
-      if (type === 'PAYMENT_PREVIEW' && payload) {
-        const status = payload.soldOut ? 'error' : (payload.bizId ? 'pending' : 'waiting');
-        const ps = { qrCode: payload.qrCode, bizId: payload.bizId, amount: payload.amount, productId: payload.productId, status, updatedAt: Date.now(), errorMsg: payload.soldOut ? 'Sold out' : undefined };
-        await safeSet('local:paymentState', ps);
-        postToOverlay({ type: 'PAYMENT_STATE', data: ps });
-      }
-
-      if (type === 'PAYMENT_PREVIEW_ERROR' && payload) {
-        const ps = { qrCode: null, bizId: null, amount: null, productId: null, status: 'error', updatedAt: Date.now(), errorMsg: payload.msg || `Error ${payload.code}` };
-        await safeSet('local:paymentState', ps);
-        postToOverlay({ type: 'PAYMENT_STATE', data: ps });
-      }
-
-      if (type === 'PAYMENT_CHECK' && payload) {
-        const status = payload.bizId === 'SUCCESS' ? 'success'
-          : payload.bizId === 'EXPIRE' ? 'expired' : 'pending';
-        const current = await safeGet<any>('local:paymentState');
-        if (current) {
-          const updated = { ...current, status, updatedAt: Date.now() };
-          await safeSet('local:paymentState', updated);
-          postToOverlay({ type: 'PAYMENT_STATE', data: updated });
         }
       }
     });
@@ -1039,30 +1020,27 @@ export default defineContentScript({
         getTicketInfo().then((info) => sendResponse({ count: info.count }));
         return true;
       }
-      if (msg.type === 'OPEN_POPUP') {
-        chrome.runtime.sendMessage({ type: 'OPEN_POPUP' });
-      }
     });
 
     // Initial overlay sync
     setTimeout(async () => {
       try {
         const info = await getTicketInfo();
-        postToOverlay({ type: 'TICKET_COUNT', count: info.count, ttl: info.ttl });
-        // Push sale time so bm-main.js can schedule auto-fire
+        postToOverlay({ type: 'TICKET_COUNT', count: info.count, tickets: info.tickets });
         const cfg = await getSaleConfig();
         const nst = getNextSaleTime(cfg);
         postToOverlay({ type: 'SALE_TIME_CONFIG', data: { config: cfg, nextSaleTime: nst } });
-        // Push captcha batch limit to MAIN world
-        const captchaCfg = await captchaStore.get();
-        postToOverlay({ type: 'CAPTCHA_CONFIG', data: { batchSessionLimit: captchaCfg.batchSessionLimit } });
+        await syncCaptchaConfig(true);
+        try {
+          const fireCfg = isExtensionContextValid() ? await fireStore.get() : { ...FIRE_CONFIG_DEFAULT };
+          postToOverlay({ type: 'FIRE_CONFIG', data: fireCfg });
+        } catch {
+          postToOverlay({ type: 'FIRE_CONFIG', data: { ...FIRE_CONFIG_DEFAULT } });
+        }
       } catch {}
     }, 2000);
 
-    void startRuntimeCalibrationLoop();
-    void startSoldOutWatcher();
-
-    // R3: Start flash sale reminder loop (checks every 60s for 60/30/15 min marks)
+    // R3: Start flash sale reminder loop
     initReminderLoop();
   },
 });

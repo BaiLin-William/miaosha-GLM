@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { version } from '../../../package.json';
+
   function openOptions() {
     chrome.runtime.openOptionsPage();
   }
@@ -8,7 +10,7 @@
   <div class="footer-actions">
     <button class="fbtn" title="Settings" onclick={openOptions}>&#9881;</button>
   </div>
-  <span class="ver">v1.0.0</span>
+  <span class="ver">v{version}</span>
 </div>
 
 <style>

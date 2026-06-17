@@ -6,6 +6,7 @@ export interface SaleTimeConfig {
   second: number;    // 0-59
   ms: number;        // 0-999
   timezone: string;  // IANA timezone, e.g. 'Asia/Shanghai'
+  soundEnabled: boolean; // master toggle for alarm beeps
 }
 
 export type SaleAlarmStatus = 'expired' | 'pending';
@@ -30,14 +31,15 @@ export interface SaleAlarmStatusSnapshot {
 }
 
 export const SALE_TIME_DEFAULT: SaleTimeConfig = {
-  hour: 9,
-  minute: 54,
-  second: 59,
-  ms: 999,
+  hour: 10,
+  minute: 0,
+  second: 0,
+  ms: 0,
   timezone: 'Asia/Shanghai',
+  soundEnabled: true,
 };
 
-export const SALE_ALARM_MINUTES = [60, 30, 15, 5] as const;
+export const SALE_ALARM_MINUTES = [60, 30, 15, 10, 5] as const;
 
 const STORAGE_KEY = 'local:saleTimeConfig';
 const ALARM_STATUS_STORAGE_KEY = 'local:saleAlarmStatus';

@@ -11,7 +11,6 @@ import {
 
 const BATCH_PREVIEW_KEY = 'local:batchPreview';
 const AUTH_HEADERS_KEY = 'local:authHeaders';
-const NEXT_SALE_TIME_KEY = 'local:nextSaleTime';
 
 interface AuthHeaders {
   authorization: string;
@@ -23,6 +22,7 @@ const BADGE_STYLES: Record<number, { text: string; color: string; desc: string }
   60: { text: '60', color: '#0ea5e9', desc: '距秒杀 60 分钟' },
   30: { text: '30', color: '#6366f1', desc: '距秒杀 30 分钟' },
   15: { text: '15', color: '#f59e0b', desc: '距秒杀 15 分钟' },
+  10: { text: '10', color: '#f97316', desc: '距秒杀 10 分钟' },
    5: { text: '5!', color: '#dc2626', desc: '距秒杀 5 分钟：立即录入验证码！' },
 };
 
@@ -101,7 +101,6 @@ export async function rescheduleSaleAlarms(reason = 'runtime') {
     }
   });
 
-  await storage.setItem(NEXT_SALE_TIME_KEY, snapshot.nextSaleTime);
   await saleTimeStore.setAlarmStatus(snapshot);
   return snapshot;
 }
@@ -133,49 +132,49 @@ export default defineBackground(() => {
     await showFlashNotification(min);
   });
 
-  // R4: Badge update + flash animation
+  // R4: Badge update — each alarm's badge persists until the next alarm replaces it.
   async function scheduleBadgeAlerts() {
     clearBadgeAlerts();
     const config = await saleTimeStore.get();
     const saleTime = getNextSaleTime(config);
     const now = Date.now();
+    const remaining = saleTime - now;
 
-    [60, 30, 15, 5].forEach((min) => {
+    function applyBadgeForMin(min: number) {
+      const style = BADGE_STYLES[min];
+      if (!style) return;
+      chrome.action.setBadgeText({ text: style.text });
+      chrome.action.setBadgeBackgroundColor({ color: style.color });
+      chrome.action.setTitle({ title: style.desc });
+    }
+
+    const phases = [60, 30, 15, 10, 5];
+
+    // If we're already inside the alarm window, show the current phase immediately.
+    if (remaining > 0) {
+      const currentPhase = phases.find((min) => remaining <= min * 60 * 1000);
+      if (currentPhase) applyBadgeForMin(currentPhase);
+    }
+
+    phases.forEach((min) => {
       const alertTime = saleTime - min * 60 * 1000;
       if (alertTime <= now) return;
-
       const delay = alertTime - now;
       const timeoutId = setTimeout(() => {
-        const style = BADGE_STYLES[min];
-        if (!style) return;
-
-        chrome.action.setBadgeText({ text: style.text });
-        chrome.action.setBadgeBackgroundColor({ color: style.color });
-        chrome.action.setTitle({ title: style.desc });
-
-        if (min === 5) {
-          // Flash badge every 500 ms until sale time
-          let flash = true;
-          const intervalId = setInterval(() => {
-            chrome.action.setBadgeText({ text: flash ? '5!' : '' });
-            flash = !flash;
-          }, 500);
-          badgeFlashIntervalId = intervalId;
-          const remaining = saleTime - Date.now();
-          if (remaining > 0) {
-            const endTimeoutId = setTimeout(() => {
-              clearInterval(intervalId);
-              badgeFlashIntervalId = null;
-              chrome.action.setBadgeText({ text: '🔥' });
-              chrome.action.setBadgeBackgroundColor({ color: '#dc2626' });
-              chrome.action.setTitle({ title: '秒杀进行中！' });
-            }, remaining);
-            badgeTimeoutIds.push(endTimeoutId);
-          }
-        }
+        applyBadgeForMin(min);
       }, delay);
       badgeTimeoutIds.push(timeoutId);
     });
+
+    // At sale time switch to the fire badge.
+    if (remaining > 0) {
+      const fireTimeoutId = setTimeout(() => {
+        chrome.action.setBadgeText({ text: '🔥' });
+        chrome.action.setBadgeBackgroundColor({ color: '#dc2626' });
+        chrome.action.setTitle({ title: '秒杀进行中！' });
+      }, remaining);
+      badgeTimeoutIds.push(fireTimeoutId);
+    }
   }
 
   // On extension install: schedule both
@@ -202,6 +201,11 @@ export default defineBackground(() => {
           fetchAndCacheBatchPreview();
           sendResponse({ ok: true, alarmStatus });
         });
+      return true;
+    }
+    if (msg.type === 'OPEN_OPTIONS_PAGE') {
+      chrome.runtime.openOptionsPage();
+      sendResponse({ ok: true });
       return true;
     }
   });

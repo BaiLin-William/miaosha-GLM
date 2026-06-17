@@ -15,7 +15,4 @@ export default defineConfig({
       },
     ],
   },
-  background: {
-    // WXT auto-discovers entrypoints/background/sw.ts with "background" in path
-  },
 });

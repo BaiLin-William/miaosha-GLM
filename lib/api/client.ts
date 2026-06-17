@@ -1,7 +1,5 @@
 import type { AuthHeaders, TestResult } from './types';
 
-declare const chrome: any;
-
 const BASE_URL = 'https://bigmodel.cn';
 const BIGMODEL_TAB_URL = '*://*.bigmodel.cn/*';
 

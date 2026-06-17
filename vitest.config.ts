@@ -50,5 +50,19 @@ export default defineConfig({
     ],
 
     globals: true,
+
+    /**
+     * Disable dependency pre-bundling in test mode. The project depends on
+     * WXT's fakeBrowser and happy-dom, whose transitive imports touch
+     * Node built-ins (e.g. node:module). Vite 6 + rolldown try to pre-bundle
+     * them and fail on 'node:module' resolution. Disabling optimization keeps
+     * tests running without impacting the production build.
+     */
+    deps: {
+      optimizer: {
+        web: { enabled: false },
+        ssr: { enabled: false },
+      },
+    },
   },
 });

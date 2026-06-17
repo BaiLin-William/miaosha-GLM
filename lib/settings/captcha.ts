@@ -6,7 +6,7 @@ export interface CaptchaConfig {
 }
 
 export const CAPTCHA_CONFIG_DEFAULT: CaptchaConfig = {
-  batchSessionLimit: 50,
+  batchSessionLimit: 100,
 };
 
 const STORAGE_KEY = 'local:captchaConfig';

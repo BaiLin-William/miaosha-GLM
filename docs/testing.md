@@ -43,16 +43,16 @@ batch-preview API → auth 捕获 → 产品矩阵构建 → 产品卡片 UI →
 | 层 | 代码 | 测试工具 | 速度 |
 |----|------|----------|------|
 | 纯逻辑 | `lib/api/catalog.ts`, `01-utils.js` | Vitest (无环境) | 极快 |
-| 存储层 | `lib/api/*-store.ts`, `lib/settings/*.ts` | Vitest + fakeBrowser | 快 |
+| 存储层 | `lib/api/auth-store.ts`, `lib/settings/*.ts` | Vitest + fakeBrowser | 快 |
 | bm-main JS | `src/bm-main/*.js` | Vitest + vm 沙箱 | 快 |
 | Svelte 组件 | `entrypoints/popup/**/*.svelte` | @testing-library/svelte | 中 |
 | Chrome API 集成 | `lib/api/auth-store.captureFromTab` | Vitest + vi.mock | 中 |
-| E2E 回归 | 完整构建产物 | Playwright (node 脚本) | 慢 |
+| E2E 回归 | — | 已删除 | — |
 
 ### 原则 3：测试行为，不测实现
 
 测试函数对 **输入 → 输出** 的契约，不要 `expect(internalVar).toBe(...)` 或 `.spy()` 内部调用顺序。  
-> ✅ `expect(await ticketStore.count()).toBe(2)`  
+> ✅ `expect(await authStore.isReady()).toBe(true)`  
 > ❌ `expect(storageSetItem).toHaveBeenCalledWith('...')`
 
 ### 原则 4：每个测试独立，fakeBrowser 每次重置
@@ -93,8 +93,6 @@ miaosha-GLM/
 │   │   │   ├── api/
 │   │   │   │   ├── catalog.test.ts          ← API_CATALOG 结构契约
 │   │   │   │   ├── auth-store.test.ts       ← authStore.get/set/isReady
-│   │   │   │   ├── payment-store.test.ts    ← paymentStore CRUD
-│   │   │   │   ├── ticket-store.test.ts     ← ticketStore FIFO + TTL 过期裁剪
 │   │   │   │   ├── runtime-calibration.test.ts  ← median() + calibrate() 逻辑
 │   │   │   │   └── client.test.ts           ← buildHeaders() 纯函数
 │   │   │   └── settings/
@@ -106,23 +104,17 @@ miaosha-GLM/
 │   │   │
 │   │   └── bm-main/
 │   │       ├── _harness.ts                  ← vm 沙箱加载工具（非测试文件）
-│   │       ├── utils.test.ts                ← 01-utils.js 格式化/推导函数
-│   │       ├── product.test.ts              ← 05-product.js buildProductMatrix
-│   │       ├── auto-fire.test.ts            ← 07-auto-fire.js 定时逻辑（待补）
-│   │       └── xhr-interception.test.ts     ← 03-xhr.js XHR 拦截（待补）
+│   │       └── product.test.ts              ← 05-product.js buildProductMatrix
 │   │
 │   ├── component/                   ← Svelte 组件测试
 │   │   └── popup/
-│   │       ├── Topbar.svelte.test.ts        ← DEV/PROD 切换 + 回调
-│   │       ├── App.svelte.test.ts           ← 模式加载 + 内容切换（待补）
-│   │       └── AuthStatusBadge.svelte.test.ts  ← auth 状态展示（待补）
+│   │       └── Topbar.svelte.test.ts        ← DEV/PROD 切换 + 回调
 │   │
-│   └── integration/                 ← 跨层集成测试（涉及 chrome.tabs/scripting mock）
-│       └── auth-capture.test.ts     ← captureFromTab 完整链路（待补）
+│   └── integration/                 ← 跨层集成测试（暂无）
 │
-└── scripts/                         ← E2E 回归门（非 vitest，嵌入 build 流水线）
-    ├── regression-target-products.js       ← 静态契约门（3 项检查，无浏览器）
-    └── regression-target-products-e2e.js  ← 运行时门（Playwright 注入 bm-main.js）
+└── scripts/                         ← 构建与打包辅助脚本
+    ├── build-overlay.js             ← 生成 public/bm-main.js
+    └── zip-prepare.js               ← 为 wxt zip 做前置准备
 ```
 
 > **命名约定**  
@@ -136,22 +128,11 @@ miaosha-GLM/
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  L6 — E2E 回归门（Playwright）                                   │
-│       scripts/regression-target-products-e2e.js                │
-│       注入 bm-main.js 到真实 bigmodel.cn 页面，断言产品卡片渲染  │
-├─────────────────────────────────────────────────────────────────┤
-│  L5 — 静态构建产物门（Node.js）                                  │
-│       scripts/regression-target-products.js                    │
-│       3x3 billing×plan 契约 + bridge 消息 + artifact hook 检查  │
-├─────────────────────────────────────────────────────────────────┤
 │  L4 — Svelte 组件测试（@testing-library/svelte + happy-dom）     │
 │       渲染 + 交互 + prop 传递 + 事件回调                         │
 ├─────────────────────────────────────────────────────────────────┤
-│  L3 — 集成测试（Vitest + vi.mock for chrome.tabs/scripting）    │
-│       captureFromTab, fetchFromBigmodelPage 跨 API 链路         │
-├─────────────────────────────────────────────────────────────────┤
 │  L2 — WXT 存储单元测试（Vitest + fakeBrowser）                   │
-│       authStore, paymentStore, ticketStore, saleTimeStore …    │
+│       authStore, saleTimeStore …                                │
 ├─────────────────────────────────────────────────────────────────┤
 │  L1 — 纯逻辑单元测试（Vitest, 无浏览器依赖）                     │
 │       catalog, 01-utils, buildProductMatrix, getNextSaleTime … │
@@ -160,7 +141,7 @@ miaosha-GLM/
 
 **规则**：尽量在最低层发现问题。L1/L2 快且不依赖环境，能覆盖核心逻辑。  
 只有确实需要浏览器交互或 DOM 的代码才升到 L4。  
-E2E（L5/L6）是最终安全网，不是主要测试手段。
+原 E2E 回归门（Playwright + Node.js 静态门）与 L3 集成测试层目前均已移除/暂无。
 
 ---
 
@@ -255,20 +236,18 @@ it('batch-preview endpoint uses POST', () => {
 
 ### 5.2 WXT 存储层测试（fakeBrowser）
 
-**适用**：`lib/api/auth-store.ts`, `lib/api/payment-store.ts`, `lib/api/ticket-store.ts`, `lib/settings/*.ts`
+**适用**：`lib/api/auth-store.ts`, `lib/settings/*.ts`
 
 `WxtVitest` 插件自动将 `wxt/browser` 替换为 `fakeBrowser` 内存实现。
 
 ```typescript
 import { fakeBrowser } from 'wxt/testing/fake-browser';
-import { ticketStore } from '../../../../lib/api/ticket-store';
+import { authStore } from '../../../../lib/api/auth-store';
 
 // setup.ts 的 beforeEach 已自动调用 fakeBrowser.reset()
 
-it('add and take a ticket', async () => {
-  await ticketStore.add('t1', 'r1');
-  const taken = await ticketStore.take();
-  expect(taken?.ticket).toBe('t1');
+it('reports not ready when storage is empty', async () => {
+  expect(await authStore.isReady()).toBe(false);
 });
 ```
 
@@ -358,9 +337,11 @@ unmount(component);
 
 ### 5.5 集成测试（chrome.tabs / chrome.scripting mock）
 
-**适用**：`lib/api/auth-store.captureFromTab()`, `lib/api/client.ts`
+**当前状态**：`tests/integration/` 目录为空，暂无集成测试。
 
-这些函数调用 `chrome.tabs.query` 和 `chrome.scripting.executeScript`，无法用 fakeBrowser 内存实现（fakeBrowser 不包含 scripting API 的真实行为）。使用 `vi.mock` 显式模拟：
+**适用场景**：`lib/api/auth-store.captureFromTab()`, `lib/api/client.ts`
+
+这些函数调用 `chrome.tabs.query` 和 `chrome.scripting.executeScript`，无法用 fakeBrowser 内存实现（fakeBrowser 不包含 scripting API 的真实行为）。如需补充，使用 `vi.mock` 显式模拟：
 
 ```typescript
 // tests/integration/auth-capture.test.ts
@@ -394,29 +375,9 @@ it('captureFromTab 从 tab 获取 auth 并写入 storage', async () => {
 
 ---
 
-### 5.6 E2E 回归门（已有，嵌入 build 流水线）
+### 5.6 E2E 回归门（已移除）
 
-E2E 门不走 Vitest，而是作为 **`npm run build` 的强制最后一步**运行：
-
-```
-npm run build = 
-  node scripts/build-overlay.js        → 生成 public/bm-main.js
-  && wxt build                         → 打包扩展到 output/chrome-mv3/
-  && node scripts/regression-target-products.js      → L5 静态契约门
-  && node scripts/regression-target-products-e2e.js  → L6 Playwright 运行时门
-```
-
-**L5 静态门**（`regression-target-products.js`）：
-- 不需要浏览器
-- 验证 billing×plan 3×3 矩阵契约
-- 验证 bm-capture 的 bridge 消息存在
-- 验证 bm-main.js artifact 包含产品引导 hook
-
-**L6 Playwright 运行时门**（`regression-target-products-e2e.js`）：
-- 注入构建产物 `bm-main.js` 到真实 bigmodel.cn 页面（`page.addInitScript`）
-- 拦截 `/api/biz/pay/batch-preview` 返回已知 9 产品 fixture
-- 断言渲染了 3 张 `.pr-t` 产品卡片
-- 断言不出现 "No products loaded" 回归文本
+原先嵌入 `npm run build` 的 L5/L6 E2E 回归门（`scripts/regression-target-products.js` 与 `scripts/regression-target-products-e2e.js`）已删除。构建流程现在只保留 `build-overlay.js` 与 `wxt build` 两步，回归验证由 Vitest 单元/组件测试覆盖。
 
 ---
 
@@ -435,7 +396,7 @@ pnpm test:ui
 # 带覆盖率报告
 pnpm test:coverage
 
-# 完整 build（包含 E2E 回归门）
+# 完整 build（仅 build-overlay + wxt build，无 E2E 回归门）
 pnpm build
 ```
 

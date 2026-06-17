@@ -1,5 +1,5 @@
 /**
- * Unit tests: src/bm-main/05-product.js — buildProductMatrix
+ * Unit tests: src/bm-main/05-product.js — buildProductMatrix + priority helpers
  *
  * Requires 01-utils (inferBillingFromPreview, formatAmount, getPromoTag,
  * getRenewLabel) which 05-product calls internally.
@@ -28,8 +28,8 @@ const FIXTURE_PRODUCT_LIST = [
 let S: BmMainScope;
 
 beforeAll(() => {
-  // 02-state defines _planOrder, _productMatrix, _billing, _selectedProducts
-  // which buildProductMatrix relies on. 01-utils provides inferBillingFromPreview.
+  // 02-state defines _planOrder, _productMatrix, _billing, _priorityList
+  // which buildProductMatrix and helpers rely on. 01-utils provides inferBillingFromPreview.
   S = loadBmMainModules(['01-utils', '02-state', '05-product']);
 });
 
@@ -51,11 +51,11 @@ describe('buildProductMatrix', () => {
     expect(matrix.yearly).toHaveLength(3);
   });
 
-  it('assigns Lite/Pro/Max plan keys in price-ascending order', () => {
-    const matrix = buildMatrix() as Record<string, Array<{ planKey: string }>>;
-    expect(matrix.monthly[0].planKey).toBe('Lite');
-    expect(matrix.monthly[1].planKey).toBe('Pro');
-    expect(matrix.monthly[2].planKey).toBe('Max');
+  it('assigns Lite/Pro/Max names in price-ascending order', () => {
+    const matrix = buildMatrix() as Record<string, Array<{ name: string }>>;
+    expect(matrix.monthly[0].name).toBe('Lite');
+    expect(matrix.monthly[1].name).toBe('Pro');
+    expect(matrix.monthly[2].name).toBe('Max');
   });
 
   it('preserves productId in each entry', () => {
@@ -75,5 +75,28 @@ describe('buildProductMatrix', () => {
     expect(matrix.monthly).toHaveLength(0);
     expect(matrix.quarterly).toHaveLength(0);
     expect(matrix.yearly).toHaveLength(0);
+  });
+});
+
+describe('getSelectionSummary with priority list', () => {
+  it('counts selected products from _priorityList', () => {
+    S._priorityList = [
+      { productId: 'p1' },
+      { productId: 'p2' },
+    ];
+    S._ticketCount = 5;
+    const summary = (S.getSelectionSummary as () => Record<string, number>)();
+    expect(summary.selected).toBe(2);
+    expect(summary.launchable).toBe(2);
+    expect(summary.tickets).toBe(5);
+  });
+});
+
+describe('restoreSelectedProducts', () => {
+  it('defaults to zero selected when no saved state exists', () => {
+    S._productMatrix = (S.buildProductMatrix as (list: unknown[]) => Record<string, unknown[]>)(FIXTURE_PRODUCT_LIST);
+    S.sessionStorage = { getItem: () => null, setItem: () => {} };
+    (S.restoreSelectedProducts as () => void)();
+    expect((S._priorityList as unknown[])).toHaveLength(0);
   });
 });

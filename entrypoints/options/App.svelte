@@ -1,14 +1,19 @@
 <script lang="ts">
   import GeneralPage from './GeneralPage.svelte';
-  import PrinciplesPage from './PrinciplesPage.svelte';
+  import UsagePage from './UsagePage.svelte';
   import ArchitecturePage from './ArchitecturePage.svelte';
+  import InsightsPage from './InsightsPage.svelte';
+  import ReleaseLogPage from './ReleaseLogPage.svelte';
+  import { version } from '../../package.json';
 
-  let currentPage = $state<'general' | 'principles' | 'architecture'>('general');
+  let currentPage = $state<'general' | 'usage' | 'architecture' | 'insights' | 'release-log'>('general');
 
   const PAGE_META: Record<string, { kicker: string; title: string; subtitle: string }> = {
     general:     { kicker: 'Settings',      title: 'General Settings', subtitle: '管理运行模式、秒杀时间与验证码录入限制。' },
-    principles:  { kicker: 'Documentation', title: '工作原理',         subtitle: '秒杀时间轴、发射策略与 soldOut 探测逻辑的完整说明。' },
+    usage:       { kicker: 'Documentation', title: '使用说明',         subtitle: 'Fire 面板四控件含义、4 种组合与 Preload → Strike → Commit 完整链路。' },
     architecture:{ kicker: 'Documentation', title: '软件架构',         subtitle: 'architecture.md 的网页版摘要：整体架构、入口点、同源代理、auth 与 ticket 系统。' },
+    insights:    { kicker: 'Documentation', title: '关键洞察',         subtitle: '通过真实实验推断的智谱后端限流算法与单用户最优发射节奏。' },
+    'release-log': { kicker: 'Release Notes', title: 'v1.2.1 更新日志', subtitle: '自 v1.0.0.alpha 以来的主要改进、新功能与代码清理。' },
   };
 </script>
 
@@ -37,19 +42,27 @@
       <section>
         <h2 class="sidebar-group-title">Documentation</h2>
         <div class="nav-list">
-          <button class="nav-item" class:is-active={currentPage === 'principles'} type="button" onclick={() => currentPage = 'principles'}>
+          <button class="nav-item" class:is-active={currentPage === 'usage'} type="button" onclick={() => currentPage = 'usage'}>
             <span class="nav-icon">&#128214;</span>
-            <span class="nav-label">工作原理</span>
+            <span class="nav-label">使用说明</span>
           </button>
           <button class="nav-item" class:is-active={currentPage === 'architecture'} type="button" onclick={() => currentPage = 'architecture'}>
             <span class="nav-icon">&#128736;</span>
             <span class="nav-label">软件架构</span>
           </button>
+          <button class="nav-item" class:is-active={currentPage === 'insights'} type="button" onclick={() => currentPage = 'insights'}>
+            <span class="nav-icon">&#128161;</span>
+            <span class="nav-label">关键洞察</span>
+          </button>
+          <button class="nav-item" class:is-active={currentPage === 'release-log'} type="button" onclick={() => currentPage = 'release-log'}>
+            <span class="nav-icon">&#128220;</span>
+            <span class="nav-label">更新日志</span>
+          </button>
         </div>
       </section>
     </div>
 
-    <div class="sidebar-footer">v1.0.0</div>
+    <div class="sidebar-footer">v{version}</div>
   </aside>
 
   <main class="main-pane">
@@ -61,8 +74,12 @@
 
     {#if currentPage === 'general'}
       <GeneralPage />
-    {:else if currentPage === 'principles'}
-      <PrinciplesPage />
+    {:else if currentPage === 'usage'}
+      <UsagePage />
+    {:else if currentPage === 'insights'}
+      <InsightsPage />
+    {:else if currentPage === 'release-log'}
+      <ReleaseLogPage />
     {:else}
       <ArchitecturePage />
     {/if}

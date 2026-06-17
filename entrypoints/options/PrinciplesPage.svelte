@@ -1,17 +1,17 @@
 <script lang="ts">
   const README_BASICS = [
-    { index: '01', title: '09:54:59.999 是服务端 ready 时间', detail: '真正可请求的窗口在 09:54:59.999（UTC+8）就已经打开；页面上每日 10:00 的标记更像"释放新库存"的展示时间，而不是抢购链路真正的最早可用时刻。' },
+    { index: '01', title: '10:00:00.000 是每日默认 target time', detail: '所有默认时间统一对齐到 UTC+8 10:00:00.000；页面展示时间、提醒时间和自动 Fire 触发点都以此为基准。' },
     { index: '02', title: '验证码可以提前囤，单个 ticket 有效 300 秒', detail: 'Tencent CAPTCHA 支持提前请求，扩展会把可用 ticket 放入池中统一管理，但超过 300 秒的旧 ticket 会被淘汰，避免把过期弹药带进真实发射。' },
-    { index: '03', title: '自动 Fire 现在分成 Initial 和 Follow-up 两段', detail: '到达 sale time 后，Initial 会把当前可用 ticket 按过期紧急度排序后立刻并发打出；若还有剩余 ticket，则转入 Follow-up，在每个 ticket 过期前 45 秒窗口内随机、逐个补发。' },
-    { index: '04', title: '最早发射目标是探测提前放量', detail: '从 T-60 开始持续观察 soldOut 状态，直到 T-5 停止。这个阶段的目标不是盲射，而是尽早发现服务器是否已经提前放库存。' },
+    { index: '03', title: '自动 Fire 使用单线程顺序 Burst', detail: '到达 sale time 后，把当前可用 ticket 按过期紧急度排序后，以 burstIntervalMs（默认 2100ms）为间隔一枪一枪顺序发射；任意一枪拿到 bizId 立即停止。' },
+    { index: '04', title: '以用户配置的 sale time 为唯一自动触发点', detail: '不再维护独立的 soldOut 探测或"提前放量"逻辑。系统只在 sale time 到来时按已选商品优先级自动开火，配合实测 latency 做提前量补偿。' },
   ];
 
   const README_STRATEGY = [
-    { phase: 'T-60', title: '最早探测窗口打开', detail: '从 T-60 起进入 soldOut 探测周期，同时系统提醒和角标倒计时开始生效。此时的重点是确认链路在线、商品选择正确，以及验证码池开始积累。' },
-    { phase: 'T-30', title: '探测频率抬升', detail: 'T-30 到 T-15 之间改为更密集的轮询，继续囤 ticket，并保持页面、popup、background 三条链路对同一 sale time 的一致认知。' },
-    { phase: 'T-15', title: '进入高频观察', detail: 'T-15 到 T-5 是最敏感的提前放量窗口，soldOut 探测会进一步加速，目的是在真正开售前尽可能早地发现服务器是否已经 ready。' },
-    { phase: 'T-5', title: '边界点而不是普通提醒点', detail: 'T-5 到来时，提醒会触发，同时 soldOut 探测立即停止。此后不再做"最早发射"判断，而是进入"Initial 并发 + Follow-up 安全补发"的最终准备阶段，用户应集中录入验证码。' },
-    { phase: 'CLEAR', title: '提前放量时自动接管开火', detail: '如果在探测窗口内观察到 soldOut 从 true 变为 false，content script 会连续报警、把 cleared 商品同步给 overlay，并在存在可发射目标时自动触发 PREFIRE_FIRE。' },
+    { phase: 'T-60', title: '提醒与验证码准备窗口打开', detail: '从 T-60 起系统通知、角标倒计时和页面提醒开始生效。重点是确认链路在线、商品选择正确，以及验证码池开始积累。' },
+    { phase: 'T-30', title: '继续囤 ticket', detail: 'T-30 到 T-15 之间继续收集验证码 ticket，并保持页面、popup、background 三条链路对同一 sale time 的一致认知。' },
+    { phase: 'T-15', title: '进入最后准备', detail: 'T-15 到 T-5 是敏感窗口，重点是确保已选商品优先级和 ticket 数量满足预期发射计划。' },
+    { phase: 'T-5', title: '边界点而不是普通提醒点', detail: 'T-5 到来时最终提醒触发。此后用户应集中录入验证码，系统将在 sale time 自动进入顺序 Burst 发射阶段。' },
+    { phase: 'FIRE', title: 'sale time 自动开火', detail: '到达 sale time 后，content script 按优先级配比分配 ticket，以单线程顺序 Burst 射击；连续 555 时退避，命中或弹药用尽时结束。' },
   ];
 </script>
 

@@ -1,4 +1,3 @@
-function getBillingLabel(b) { return b === 'yearly' ? '年付' : b === 'quarterly' ? '季付' : '月付'; }
 function formatAmount(value) {
   var num = Number(value);
   if (!isFinite(num)) return '';

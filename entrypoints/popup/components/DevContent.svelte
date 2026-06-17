@@ -82,19 +82,10 @@
 
   .tab-row {
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
     margin-bottom: 14px;
-    overflow-x: auto;
     padding-right: 12px;
-  }
-
-  .tab-row::-webkit-scrollbar {
-    height: 2px;
-  }
-
-  .tab-row::-webkit-scrollbar-thumb {
-    background: rgba(99, 102, 241, 0.2);
-    border-radius: 99px;
   }
 
   .tab-chip {

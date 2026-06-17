@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { devEnvironment, type DevMode } from '../../lib/settings/dev';
   import {
     SALE_TIME_DEFAULT,
     getNextSaleTime,
@@ -7,13 +6,18 @@
     type SaleAlarmStatusSnapshot,
     type SaleTimeConfig,
   } from '../../lib/settings/sale-time';
+  import ReminderTimeline from './ReminderTimeline.svelte';
   import {
     CAPTCHA_CONFIG_DEFAULT,
     captchaStore,
     type CaptchaConfig,
   } from '../../lib/settings/captcha';
+  import {
+    FIRE_CONFIG_DEFAULT,
+    fireStore,
+    type FireConfig,
+  } from '../../lib/settings/fire';
 
-  let mode = $state<DevMode>('development');
   let loaded = $state(false);
 
   let saleHour = $state(9);
@@ -21,6 +25,7 @@
   let saleSecond = $state(59);
   let saleMs = $state(999);
   let saleTimezone = $state('Asia/Shanghai');
+  let saleSoundEnabled = $state(true);
   let committedSale = $state<SaleTimeConfig | null>(null);
   let alarmStatus = $state<SaleAlarmStatusSnapshot | null>(null);
   let saleSaving = $state(false);
@@ -30,6 +35,11 @@
   let committedCaptcha = $state<CaptchaConfig | null>(null);
   let captchaSaving = $state(false);
   let captchaSaveMessage = $state('');
+
+  let burstIntervalMs = $state(FIRE_CONFIG_DEFAULT.burstIntervalMs);
+  let committedFireConfig = $state<FireConfig | null>(null);
+  let fireSaving = $state(false);
+  let fireSaveMessage = $state('');
 
   const TIMEZONES = [
     { value: 'Asia/Shanghai',    label: '🇨🇳 北京时间 (UTC+8)' },
@@ -43,29 +53,26 @@
 
   $effect(() => {
     Promise.all([
-      devEnvironment.get(),
       saleTimeStore.get(),
       saleTimeStore.getAlarmStatus(),
       captchaStore.get(),
-    ]).then(([m, s, status, captcha]) => {
-      mode = m;
+      fireStore.get(),
+    ]).then(([s, status, captcha, fire]) => {
       saleHour = s.hour;
       saleMinute = s.minute;
       saleSecond = s.second;
       saleMs = s.ms;
       saleTimezone = s.timezone;
+      saleSoundEnabled = s.soundEnabled;
       committedSale = { ...s };
       alarmStatus = status;
       batchSessionLimit = captcha.batchSessionLimit;
       committedCaptcha = { ...captcha };
+      burstIntervalMs = fire.burstIntervalMs;
+      committedFireConfig = { ...fire };
       loaded = true;
     });
   });
-
-  function handleModeChange(newMode: DevMode) {
-    mode = newMode;
-    devEnvironment.set(newMode);
-  }
 
   function currentSaleConfig(): SaleTimeConfig {
     return {
@@ -74,6 +81,7 @@
       second: Number(saleSecond),
       ms: Math.max(0, Math.min(999, Number(saleMs) || 0)),
       timezone: saleTimezone,
+      soundEnabled: saleSoundEnabled,
     };
   }
 
@@ -83,20 +91,36 @@
       && a.minute === b.minute
       && a.second === b.second
       && a.ms === b.ms
-      && a.timezone === b.timezone;
+      && a.timezone === b.timezone
+      && a.soundEnabled === b.soundEnabled;
   }
 
   function isSaleDirty(): boolean {
     return !sameSaleConfig(committedSale, currentSaleConfig());
   }
 
+  function formatTimezoneOffset(tz: string, ts: number): string {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      timeZoneName: 'shortOffset',
+    }).formatToParts(new Date(ts));
+    const offsetPart = parts.find((p) => p.type === 'timeZoneName');
+    return (offsetPart?.value || 'UTC').replace(/^GMT/, 'UTC');
+  }
+
   function formatTs(ts: number, timezone = saleTimezone): string {
+    const offset = formatTimezoneOffset(timezone, ts);
     return new Intl.DateTimeFormat('zh-CN', {
       timeZone: timezone,
       year: 'numeric', month: 'numeric', day: 'numeric',
       hour: '2-digit', minute: '2-digit', second: '2-digit',
       fractionalSecondDigits: 3,
-    }).format(new Date(ts));
+    }).format(new Date(ts)) + ` (${offset})`;
+  }
+
+  function formatDefaultTargetTs(): string {
+    const ts = getNextSaleTime(SALE_TIME_DEFAULT);
+    return formatTs(ts, SALE_TIME_DEFAULT.timezone);
   }
 
   function computeNextSaleTs(): string {
@@ -143,6 +167,7 @@
     saleSecond = SALE_TIME_DEFAULT.second;
     saleMs = SALE_TIME_DEFAULT.ms;
     saleTimezone = SALE_TIME_DEFAULT.timezone;
+    saleSoundEnabled = SALE_TIME_DEFAULT.soundEnabled;
     await handleSaleTimeConfirm();
   }
 
@@ -151,7 +176,7 @@
   }
 
   async function handleCaptchaConfirm() {
-    const clamped = Math.max(1, Math.min(200, Number(batchSessionLimit) || CAPTCHA_CONFIG_DEFAULT.batchSessionLimit));
+    const clamped = Math.max(1, Math.min(1000, Number(batchSessionLimit) || CAPTCHA_CONFIG_DEFAULT.batchSessionLimit));
     batchSessionLimit = clamped;
     const config: CaptchaConfig = { batchSessionLimit: clamped };
     captchaSaving = true;
@@ -169,63 +194,43 @@
     batchSessionLimit = CAPTCHA_CONFIG_DEFAULT.batchSessionLimit;
     await handleCaptchaConfirm();
   }
+
+  function currentFireConfig(): FireConfig {
+    return {
+      ...(committedFireConfig ?? FIRE_CONFIG_DEFAULT),
+      burstIntervalMs: Math.max(50, Math.round(Number(burstIntervalMs)) || FIRE_CONFIG_DEFAULT.burstIntervalMs),
+    };
+  }
+
+  function sameFireConfig(a: FireConfig | null, b: FireConfig): boolean {
+    return !!a && a.burstIntervalMs === b.burstIntervalMs;
+  }
+
+  function isFireDirty(): boolean {
+    return !sameFireConfig(committedFireConfig, currentFireConfig());
+  }
+
+  async function handleFireConfirm() {
+    const config = currentFireConfig();
+    fireSaving = true;
+    fireSaveMessage = '';
+    try {
+      await fireStore.set(config);
+      committedFireConfig = { ...config };
+      burstIntervalMs = config.burstIntervalMs;
+      fireSaveMessage = `已生效：Burst ${config.burstIntervalMs}ms`;
+    } finally {
+      fireSaving = false;
+    }
+  }
+
+  async function handleFireReset() {
+    burstIntervalMs = FIRE_CONFIG_DEFAULT.burstIntervalMs;
+    await handleFireConfirm();
+  }
 </script>
 
 <div class="page-stack">
-  <section class="section-card">
-    <div class="section-heading">
-      <span class="accent-bar"></span>
-      <h3>DEV Environment</h3>
-    </div>
-    <p class="section-note">Select the environment mode for the extension. Development mode enables debug features and verbose logging.</p>
-
-    {#if loaded}
-      <div class="settings-grid">
-        <div class="radio-card" class:is-selected={mode === 'development'}>
-          <label class="radio-label">
-            <input type="radio" name="dev-mode" value="development" checked={mode === 'development'} onchange={() => handleModeChange('development')} />
-            <div class="radio-content">
-              <div class="radio-header">
-                <span class="radio-icon dev-icon">&#128736;</span>
-                <div>
-                  <strong>Development</strong>
-                  <span class="radio-badge dev-badge">DEV</span>
-                </div>
-              </div>
-              <p>Enable debug features and verbose logging</p>
-            </div>
-          </label>
-        </div>
-
-        <div class="radio-card" class:is-selected={mode === 'production'}>
-          <label class="radio-label">
-            <input type="radio" name="dev-mode" value="production" checked={mode === 'production'} onchange={() => handleModeChange('production')} />
-            <div class="radio-content">
-              <div class="radio-header">
-                <span class="radio-icon prod-icon">&#9889;</span>
-                <div>
-                  <strong>Production</strong>
-                  <span class="radio-badge prod-badge">PROD</span>
-                </div>
-              </div>
-              <p>Optimized for end users</p>
-            </div>
-          </label>
-        </div>
-      </div>
-
-      <div class="status-bar">
-        <span class="status-dot" class:dev={mode === 'development'} class:prod={mode === 'production'}></span>
-        <span class="status-text">Current mode: <code>{mode}</code></span>
-      </div>
-    {:else}
-      <div class="loading-skeleton">
-        <div class="skeleton-row"></div>
-        <div class="skeleton-row"></div>
-      </div>
-    {/if}
-  </section>
-
   <section class="section-card">
     <div class="section-heading">
       <span class="accent-bar" style="background: var(--violet); box-shadow: 0 0 14px rgba(99,102,241,0.35);"></span>
@@ -284,23 +289,16 @@
           {/if}
         </div>
 
+        <div class="form-row sound-toggle-row">
+          <label class="sound-switch" for="sale-sound">
+            <input id="sale-sound" type="checkbox" bind:checked={saleSoundEnabled} />
+            <span class="switch-track"></span>
+            <span class="switch-label">{saleSoundEnabled ? '🔊 提醒声音已开启' : '🔇 提醒声音已关闭'}</span>
+          </label>
+        </div>
+
         {#if alarmStatus}
-          <div class="alarm-status-panel">
-            <div class="alarm-status-head">
-              <span>提醒校正</span>
-              <code>{formatTs(alarmStatus.nextSaleTime, alarmStatus.config.timezone)}</code>
-            </div>
-            <div class="alarm-status-list">
-              {#each alarmStatus.items as item}
-                <div class="alarm-status-row" class:is-pending={item.status === 'pending'} class:is-expired={item.status === 'expired'}>
-                  <span class="alarm-name">T-{item.minutesBefore}m</span>
-                  <span class="alarm-time">{formatTs(item.notificationTime, alarmStatus.config.timezone)}</span>
-                  <span class="alarm-relative">{formatRelative(item.msUntilNotification)}</span>
-                  <span class="alarm-state">{item.status === 'pending' ? '未生效' : '已过期'}</span>
-                </div>
-              {/each}
-            </div>
-          </div>
+          <ReminderTimeline {alarmStatus} soundEnabled={saleSoundEnabled} />
         {/if}
 
         <div class="sale-time-actions">
@@ -311,7 +309,7 @@
             {saleSaving ? '校正中...' : '确定生效'}
           </button>
           <button class="btn-reset" type="button" onclick={handleReset}>
-            ↺ 重置默认 <span class="reset-hint">09:54:59.999 (UTC+8)</span>
+            ↺ 重置默认 <span class="reset-hint">{formatDefaultTargetTs()}</span>
           </button>
         </div>
       </div>
@@ -327,14 +325,14 @@
       <span class="accent-bar" style="background: var(--amber); box-shadow: 0 0 14px rgba(217,119,6,0.35);"></span>
       <h3>&#127915; 验证码录入</h3>
     </div>
-    <p class="section-note">设置一次 Batch 录入验证码的最大个数。达到上限后自动停止。</p>
+    <p class="section-note">设置验证码池的最大容量，同时也等于一次 Batch 录入的上限。达到上限后自动停止；票池越满，秒杀命中概率越高。</p>
 
     {#if loaded}
       <div class="sale-time-form">
         <div class="form-row">
           <div class="form-group">
-            <label class="form-label" for="batch-limit">每轮录入个数</label>
-            <input id="batch-limit" type="number" class="form-select form-input-num" min="1" max="200" step="1" bind:value={batchSessionLimit} />
+            <label class="form-label" for="batch-limit">验证码池上限 / 每轮录入上限</label>
+            <input id="batch-limit" type="number" class="form-select form-input-num" min="1" max="1000" step="1" bind:value={batchSessionLimit} />
           </div>
           <div class="form-group" style="flex: 2;">
             <div class="next-sale-preview" style="margin-top: 0;">
@@ -358,6 +356,52 @@
           </button>
           <button class="btn-reset" type="button" onclick={handleCaptchaReset}>
             ↺ 重置默认 <span class="reset-hint">{CAPTCHA_CONFIG_DEFAULT.batchSessionLimit} 个</span>
+          </button>
+        </div>
+      </div>
+    {:else}
+      <div class="loading-skeleton">
+        <div class="skeleton-row"></div>
+      </div>
+    {/if}
+  </section>
+
+  <section class="section-card">
+    <div class="section-heading">
+      <span class="accent-bar" style="background: var(--rose); box-shadow: 0 0 14px rgba(225,29,72,0.35);"></span>
+      <h3>&#128293; Fire 发射参数</h3>
+    </div>
+    <p class="section-note">控制 Burst 阶段的发射节奏。智谱后端使用 2 秒滑动窗口限流（阈值=1），低于 2 秒会触发大量 555；实测 2100ms 是单用户最优节奏。</p>
+
+    {#if loaded}
+      <div class="sale-time-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="fire-burst-interval">Burst 单发间隔（ms）</label>
+            <input id="fire-burst-interval" type="number" class="form-select form-input-num" min="500" max="10000" step="100" bind:value={burstIntervalMs} />
+          </div>
+          <div class="form-group" style="flex: 2;">
+            <div class="next-sale-preview" style="margin-top: 0;">
+              <span class="preview-label">当前配置</span>
+              <span class="preview-value">
+                <span class="highlight-val">{burstIntervalMs}ms</span>
+              </span>
+              {#if isFireDirty()}
+                <span class="dirty-pill">待确认</span>
+              {/if}
+            </div>
+          </div>
+        </div>
+
+        <div class="sale-time-actions">
+          {#if fireSaveMessage}
+            <span class="save-message">{fireSaveMessage}</span>
+          {/if}
+          <button class="btn-confirm" type="button" onclick={handleFireConfirm} disabled={fireSaving || !isFireDirty()}>
+            {fireSaving ? '保存中...' : '确定生效'}
+          </button>
+          <button class="btn-reset" type="button" onclick={handleFireReset}>
+            ↺ 重置默认 <span class="reset-hint">{FIRE_CONFIG_DEFAULT.burstIntervalMs}ms</span>
           </button>
         </div>
       </div>
@@ -407,45 +451,6 @@
   .section-heading h3 { margin: 0; font-size: 1.1rem; font-weight: 800; color: var(--text-strong); letter-spacing: -0.02em; }
   .section-note { margin: 0 0 24px 18px; color: var(--text-muted); font-size: 13px; line-height: 1.6; position: relative; z-index: 1; }
 
-  .settings-grid { display: flex; flex-direction: column; gap: 16px; position: relative; z-index: 1; }
-  .radio-card {
-    border-radius: var(--radius-lg);
-    border: 1px solid var(--panel-border-soft);
-    background: rgba(255,255,255,0.36);
-    box-shadow: 0 10px 24px rgba(148,163,184,0.1);
-    transition: all 200ms ease;
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-  }
-  @media (prefers-color-scheme: dark) { .radio-card { background: rgba(15,23,42,0.46); } }
-  .radio-card:hover { transform: translateY(-2px); box-shadow: 0 14px 32px rgba(148,163,184,0.16); }
-  .radio-card.is-selected {
-    border-color: rgba(16,185,129,0.36);
-    background: linear-gradient(135deg, rgba(16,185,129,0.08), rgba(20,184,166,0.04));
-    box-shadow: 0 0 0 1px rgba(16,185,129,0.12), 0 14px 32px rgba(16,185,129,0.12);
-  }
-  .radio-label { display: flex; align-items: flex-start; gap: 16px; padding: 20px 22px; cursor: pointer; width: 100%; }
-  .radio-label input[type='radio'] { position: absolute; opacity: 0; pointer-events: none; }
-  .radio-content { flex: 1; min-width: 0; }
-  .radio-header { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
-  .radio-icon { width: 40px; height: 40px; border-radius: 14px; display: grid; place-items: center; font-size: 18px; flex: 0 0 auto; }
-  .dev-icon { background: rgba(251,191,36,0.16); color: #d97706; }
-  .prod-icon { background: rgba(16,185,129,0.14); color: var(--primary); }
-  .radio-header strong { font-size: 15px; font-weight: 700; color: var(--text-strong); }
-  .radio-header > div { display: flex; align-items: center; gap: 8px; }
-  .radio-badge { display: inline-flex; padding: 2px 8px; border-radius: 999px; font-size: 9px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; }
-  .dev-badge { background: rgba(251,191,36,0.16); color: #d97706; border: 1px solid rgba(251,191,36,0.28); }
-  .prod-badge { background: rgba(16,185,129,0.14); color: var(--primary-strong); border: 1px solid rgba(16,185,129,0.24); }
-  .radio-content p { margin: 0; color: var(--text-muted); font-size: 13px; line-height: 1.5; }
-
-  .status-bar { display: flex; align-items: center; gap: 10px; margin-top: 20px; padding: 14px 18px; border-radius: 14px; background: rgba(255,255,255,0.34); border: 1px solid var(--panel-border-soft); position: relative; z-index: 1; }
-  @media (prefers-color-scheme: dark) { .status-bar { background: rgba(15,23,42,0.34); } }
-  .status-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
-  .status-dot.dev { background: #f59e0b; box-shadow: 0 0 10px rgba(245,158,11,0.4); }
-  .status-dot.prod { background: var(--primary); box-shadow: 0 0 10px rgba(16,185,129,0.4); }
-  .status-text { font-size: 13px; color: var(--text-muted); }
-  .status-text code { background: rgba(148,163,184,0.16); padding: 2px 8px; border-radius: 6px; font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 12px; font-weight: 600; color: var(--text-strong); }
-
   .sale-time-form { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 16px; }
   .form-row { display: flex; gap: 12px; align-items: flex-end; }
   .form-group { display: flex; flex-direction: column; gap: 6px; flex: 1; }
@@ -468,23 +473,26 @@
   .highlight-val { color: var(--violet); font-weight: 800; font-size: 16px; }
   .dirty-pill { margin-left: auto; padding: 3px 8px; border-radius: 999px; background: var(--amber-soft); color: var(--amber); border: 1px solid rgba(217,119,6,0.18); font-size: 11px; font-weight: 800; }
 
-  .alarm-status-panel { border-radius: 14px; border: 1px solid var(--panel-border-soft); background: rgba(255,255,255,0.34); overflow: hidden; }
-  @media (prefers-color-scheme: dark) { .alarm-status-panel { background: rgba(15,23,42,0.32); } }
-  .alarm-status-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line-soft); color: var(--text-muted); font-size: 12px; font-weight: 800; }
-  .alarm-status-head code { color: var(--violet); font-size: 11px; font-weight: 800; background: rgba(99,102,241,0.08); padding: 3px 7px; border-radius: 8px; }
-  .alarm-status-list { display: flex; flex-direction: column; }
-  .alarm-status-row { display: grid; grid-template-columns: 68px minmax(180px,1fr) 76px 68px; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid rgba(188,200,214,0.28); font-size: 12px; }
-  .alarm-status-row:last-child { border-bottom: 0; }
-  .alarm-name { font-family: 'SF Mono', Monaco, Consolas, monospace; font-weight: 800; color: var(--text-strong); }
-  .alarm-time { color: var(--text-main); font-weight: 600; }
-  .alarm-relative { color: var(--text-muted); font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 11px; }
-  .alarm-state { justify-self: end; padding: 3px 7px; border-radius: 999px; font-size: 11px; font-weight: 800; }
-  .alarm-status-row.is-pending .alarm-state { color: var(--primary-strong); background: var(--primary-soft); }
-  .alarm-status-row.is-expired { opacity: 0.66; }
-  .alarm-status-row.is-expired .alarm-state { color: var(--rose); background: var(--rose-soft); }
-
   .sale-time-actions { display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
   .save-message { margin-right: auto; color: var(--primary-strong); font-size: 12px; font-weight: 700; }
+  .sound-toggle-row { align-items: center; }
+  .sound-switch {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-size: 13px; font-weight: 700; color: var(--text-strong);
+    cursor: pointer; user-select: none;
+  }
+  .sound-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .switch-track {
+    width: 38px; height: 22px; border-radius: 999px;
+    background: #cbd5e1; position: relative; transition: background 180ms ease;
+  }
+  .sound-switch input:checked + .switch-track { background: var(--primary-strong); }
+  .switch-track::after {
+    content: ''; position: absolute; top: 2px; left: 2px;
+    width: 18px; height: 18px; border-radius: 50%; background: #fff;
+    transition: transform 180ms ease;
+  }
+  .sound-switch input:checked + .switch-track::after { transform: translateX(16px); }
   .btn-confirm, .btn-reset {
     display: inline-flex; align-items: center; gap: 8px; padding: 9px 18px; border-radius: 12px;
     border: 1px solid rgba(99,102,241,0.28); background: rgba(99,102,241,0.08); color: var(--violet);

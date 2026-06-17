@@ -52,7 +52,7 @@ function makeSandbox(): BmMainScope {
 
   const sandbox: BmMainScope = {
     document: doc,
-    window: { postMessage: () => {} },
+    window: { postMessage: () => {}, addEventListener: () => {}, removeEventListener: () => {} },
     sessionStorage: { getItem: () => null, setItem: () => {} },
     localStorage: { getItem: () => null, setItem: () => {} },
     performance: { now: () => Date.now() },

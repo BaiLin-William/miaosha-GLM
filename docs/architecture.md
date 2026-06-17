@@ -217,7 +217,7 @@ Tencent CAPTCHA 每次使用后失效，且有效期 5 分钟（错误码 8 即 
 ### Ticket 池设计
 
 ```typescript
-// lib/api/ticket-store.ts
+// local:ticketPool 条目结构
 interface Ticket {
   ticket: string;   // Tencent CAPTCHA ticket
   randstr: string;  // 配套 randstr
@@ -226,7 +226,7 @@ interface Ticket {
 ```
 
 - 最多存 20 个 ticket（`MAX_POOL_SIZE = 20`）
-- 每次 `getAll()` 自动清除超过 5 分钟的过期 ticket
+- 每次读取前自动清除超过 5 分钟的过期 ticket
 - 去重：相同 `ticket` 字符串不重复入池
 
 ### 获取流程
@@ -238,9 +238,7 @@ bm-main.js (XHR 拦截) 捕获到 ticket + randstr
   ↓
 window.postMessage → bm-capture.content.ts
   ↓
-ticketStore.add(ticket, randstr)
-  ↓
-chrome.storage.local['local:ticketPool'] = [...]
+写入 chrome.storage.local['local:ticketPool']
 ```
 
 ### 使用流程（秒杀触发）
@@ -248,12 +246,11 @@ chrome.storage.local['local:ticketPool'] = [...]
 ```
 用户点击"开火"按钮（PROD 模式或 bm-main 覆盖层）
   ↓
-ticketStore.takeAll() → 取出所有有效 ticket
+bm-capture.content.ts 读取 local:ticketPool
+  ↓
+buildAutoFirePlan() 按优先级与过期紧迫度分配 ticket
   ↓
 对每个 (ticket × productId) 发起 /api/biz/pay/preview 请求
-  ↓
-code: 200 + bizId → 下单成功 → paymentStore.set(state)
-                              → PaymentCard 轮询 /api/biz/pay/check
 ```
 
 ---
@@ -266,10 +263,9 @@ code: 200 + bizId → 下单成功 → paymentStore.set(state)
 |---------|-----------------|------|--------|--------|
 | `local:authHeaders` | `local:authHeaders` | `AuthHeaders` | bm-capture, authStore.set | popup, bm-capture |
 | `local:ticketPool` | `local:ticketPool` | `Ticket[]` | bm-capture | bm-capture (开火时) |
-| `local:paymentState` | `local:paymentState` | `PaymentState` | bm-capture (开火成功后) | popup ProdContent |
 | `local:saleTimeConfig` | `local:saleTimeConfig` | `SaleTimeConfig` | options 页 | background, bm-capture |
 | `local:devMode` | `local:devMode` | `'development'\|'production'` | popup Topbar | popup App.svelte |
-| `local:selectedProducts` | `local:selectedProducts` | `{selected: Record<string, boolean>}` | bm-main 覆盖层 | bm-capture (开火时) |
+| `local:selectedProducts` | `local:selectedProducts` | `{priorityList: Array<{productId, percentage}>, count, version}` | bm-main 覆盖层 | bm-capture (开火时) |
 
 **WXT storage 命名约定**: `local:` 前缀表示 `chrome.storage.local`（区别于 `session:` 和 `sync:`）。WXT 的 `storage.setItem('local:foo', v)` 等价于 `chrome.storage.local.set({'local:foo': v})`——key 是字面量，不做前缀 strip。
 
@@ -317,8 +313,7 @@ document.head.appendChild(script);
 │   │   ├── catalog.ts         # API 端点目录（7个端点）
 │   │   ├── client.ts          # executeScript 代理请求
 │   │   ├── auth-store.ts      # Auth CRUD + captureFromTab
-│   │   ├── ticket-store.ts    # Ticket 池 CRUD
-│   │   └── payment-store.ts   # 支付状态 CRUD
+│   │   └── fire-plan.ts       # ticket 分配与自动开火计划
 │   └── settings/
 │       └── dev.ts             # DevMode 设置
 ├── public/
@@ -332,7 +327,6 @@ document.head.appendChild(script);
 ```bash
 npm run dev      # 开发模式（HMR，扩展自动重载）
 npm run build    # 生产构建 → output/chrome-mv3/
-npm run compile  # 仅 TypeScript 类型检查（tsc --noEmit）
 ```
 
 ### 加载扩展

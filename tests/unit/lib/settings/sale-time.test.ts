@@ -11,11 +11,11 @@ import {
 } from '../../../../lib/settings/sale-time';
 
 describe('SALE_TIME_DEFAULT', () => {
-  it('points to 09:54:59.999 Asia/Shanghai', () => {
-    expect(SALE_TIME_DEFAULT.hour).toBe(9);
-    expect(SALE_TIME_DEFAULT.minute).toBe(54);
-    expect(SALE_TIME_DEFAULT.second).toBe(59);
-    expect(SALE_TIME_DEFAULT.ms).toBe(999);
+  it('points to 10:00:00.000 Asia/Shanghai (UTC+8)', () => {
+    expect(SALE_TIME_DEFAULT.hour).toBe(10);
+    expect(SALE_TIME_DEFAULT.minute).toBe(0);
+    expect(SALE_TIME_DEFAULT.second).toBe(0);
+    expect(SALE_TIME_DEFAULT.ms).toBe(0);
     expect(SALE_TIME_DEFAULT.timezone).toBe('Asia/Shanghai');
   });
 });
