@@ -95,8 +95,8 @@ export interface BadgeAlarmPlan {
 
 /**
  * Compute badge alarm times.
- * Each countdown badge (60/30/15/10/5) is shown for exactly one minute,
- * then hidden. The fire badge appears at sale time and stays.
+ * Each countdown badge (60/30/15/10/5) and the fire badge (T-0) are shown
+ * for exactly one minute, then hidden.
  */
 export function computeBadgeAlarmPlan(saleTime: number, now: number): { show: BadgeAlarmPlan[]; hide: BadgeAlarmPlan[] } {
   const show: BadgeAlarmPlan[] = [];
@@ -115,6 +115,9 @@ export function computeBadgeAlarmPlan(saleTime: number, now: number): { show: Ba
 
   if (saleTime > now) {
     show.push({ name: 'badge-fire', when: saleTime });
+  }
+  if (saleTime + 60_000 > now) {
+    hide.push({ name: 'badge-fire-hide', when: saleTime + 60_000 });
   }
 
   return { show, hide };
@@ -184,6 +187,11 @@ export default defineBackground(() => {
     }
 
     if (name.startsWith('badge-')) {
+      if (name === 'badge-fire-hide') {
+        clearBadgeAlerts();
+        return;
+      }
+
       const parts = name.split('-');
       const kind = parts[1];
 
@@ -213,6 +221,7 @@ export default defineBackground(() => {
       ...SALE_ALARM_MINUTES.map((min) => chrome.alarms.clear(`badge-show-${min}`)),
       ...SALE_ALARM_MINUTES.map((min) => chrome.alarms.clear(`badge-hide-${min}`)),
       chrome.alarms.clear('badge-fire'),
+      chrome.alarms.clear('badge-fire-hide'),
     ]);
 
     const { show, hide } = computeBadgeAlarmPlan(saleTime, now);
@@ -224,6 +233,11 @@ export default defineBackground(() => {
     const currentPhase = getCurrentBadgePhase(saleTime, now);
     if (currentPhase) {
       applyBadgeForMin(currentPhase);
+    } else if (now >= saleTime && now < saleTime + 60_000) {
+      // T-0 fire badge window
+      chrome.action.setBadgeText({ text: '🔥' });
+      chrome.action.setBadgeBackgroundColor({ color: '#dc2626' });
+      chrome.action.setTitle({ title: '秒杀进行中！' });
     }
   }
 

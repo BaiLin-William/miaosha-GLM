@@ -131,6 +131,7 @@ describe('computeBadgeAlarmPlan', () => {
       'badge-show-60',
     ]);
     expect(hide.map((a) => a.name).sort()).toEqual([
+      'badge-fire-hide',
       'badge-hide-10',
       'badge-hide-15',
       'badge-hide-30',
@@ -146,6 +147,13 @@ describe('computeBadgeAlarmPlan', () => {
       expect(hideAlarm).toBeDefined();
       expect(hideAlarm!.when - showAlarm!.when).toBe(60_000);
     }
+
+    // Fire badge also hides one minute after sale time.
+    const fireShow = show.find((a) => a.name === 'badge-fire');
+    const fireHide = hide.find((a) => a.name === 'badge-fire-hide');
+    expect(fireShow).toBeDefined();
+    expect(fireHide).toBeDefined();
+    expect(fireHide!.when - fireShow!.when).toBe(60_000);
   });
 
   it('skips alarms whose show/hide times are already past', () => {
@@ -161,10 +169,20 @@ describe('computeBadgeAlarmPlan', () => {
       'badge-show-5',
     ]);
     expect(hide.map((a) => a.name).sort()).toEqual([
+      'badge-fire-hide',
       'badge-hide-10',
       'badge-hide-15',
       'badge-hide-5',
     ]);
+  });
+
+  it('skips the fire badge alarms once the one-minute fire window has passed', () => {
+    const saleTime = atUtc('2026-05-31T02:00:00.000Z'); // 10:00 UTC+8
+    const now = saleTime + 90_000; // 10:01:30 UTC+8, fire window over
+    const { show, hide } = computeBadgeAlarmPlan(saleTime, now);
+
+    expect(show.some((a) => a.name === 'badge-fire')).toBe(false);
+    expect(hide.some((a) => a.name === 'badge-fire-hide')).toBe(false);
   });
 });
 
