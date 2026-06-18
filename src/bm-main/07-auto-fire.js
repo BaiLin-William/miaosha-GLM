@@ -11,13 +11,9 @@ function scheduleAutoFire(nextSaleTime) {
     return;
   }
 
-  // Auto-fire timing: we want the first request to *arrive* at the server as
-  // close to sale time as possible. latencyMs is a round-trip measurement;
-  // compensate for one-way delay (RTT/2) plus a small safety buffer for
-  // setTimeout jitter and network variance.
-  var EARLY_MS = 40;
-  var oneWayLatency = Math.round((_rt.latencyMs || 0) / 2);
-  var fireAtLocal = nextSaleTime - oneWayLatency - EARLY_MS;
+  // Auto-fire timing: fire locally at target time minus the measured RTT latency.
+  var latencyMs = Math.max(0, Math.round(_rt.latencyMs || 0));
+  var fireAtLocal = nextSaleTime - latencyMs;
   var delay = fireAtLocal - Date.now();
 
   var autoEl = document.getElementById('_auto');
@@ -63,8 +59,8 @@ function dispatchAutoFire() {
   var ts = new Date().toISOString().replace('T', ' ').substring(0, 23);
   var autoEl = document.getElementById('_auto');
   if (autoEl) autoEl.textContent = 'Fired @ ' + ts.slice(11);
-  var oneWayLatency = Math.round((_rt.latencyMs || 0) / 2);
-  var startMs = _rt.nextSaleTime - oneWayLatency - 40;
+  var latencyMs = Math.max(0, Math.round(_rt.latencyMs || 0));
+  var startMs = _rt.nextSaleTime - latencyMs;
   window.postMessage({ __miaosha_cmd: true, type: 'PREFIRE_FIRE', data: { startMs: startMs, reason: 'auto' } }, '*');
 }
 

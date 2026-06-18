@@ -394,7 +394,6 @@ export default defineContentScript({
         return null;
       }
 
-      const t0 = performance.now();
       try {
         const res = await fetch('https://bigmodel.cn/api/biz/pay/batch-preview', {
           method: 'POST',
@@ -409,9 +408,6 @@ export default defineContentScript({
         });
 
         const data = await res.json();
-        const rttMs = Math.round(performance.now() - t0);
-        postToOverlay({ type: 'RUNTIME_CALIBRATION', data: { latencyMs: rttMs, calibratedAt: Date.now(), source: 'batch-preview' } });
-
         if (data?.code === 200 && data?.data?.productList) {
           await safeSet(BATCH_PREVIEW_KEY, data);
           return data.data.productList as any[];
@@ -422,10 +418,39 @@ export default defineContentScript({
       }
     }
 
+    async function measurePayPreviewLatency(authHeaders: any) {
+      if (!authHeaders?.authorization || !authHeaders?.bigmodelOrganization || !authHeaders?.bigmodelProject) {
+        return;
+      }
+      const t0 = performance.now();
+      try {
+        await fetch('https://bigmodel.cn/api/biz/pay/preview', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'content-type': 'application/json;charset=UTF-8',
+            authorization: authHeaders.authorization,
+            'bigmodel-organization': authHeaders.bigmodelOrganization,
+            'bigmodel-project': authHeaders.bigmodelProject,
+          },
+          body: JSON.stringify({ productId: 'fake-product-id', ticket: 'fake-ticket', randstr: 'fake-randstr' }),
+        });
+      } catch {
+        // Ignore validation errors; we only need the RTT of this probe.
+      }
+      const rttMs = Math.round(performance.now() - t0);
+      postToOverlay({
+        type: 'RUNTIME_CALIBRATION',
+        data: { latencyMs: rttMs, calibratedAt: Date.now(), source: 'pay-preview' },
+      });
+    }
+
     // ── Batch Preview bridge: storage → MAIN world ──
     async function pushBatchPreviewToOverlay() {
       const authHeaders = await getFreshAuthHeaders();
       if (!isAuthValid(authHeaders)) return false;
+      // Latency probe is fire-and-forget; never let it delay product rendering.
+      measurePayPreviewLatency(authHeaders);
       const cached = await safeGet<any>(BATCH_PREVIEW_KEY);
       if (cached?.data?.productList) {
         postToOverlay({ type: 'BATCH_PREVIEW_DATA', data: cached.data.productList });
@@ -435,6 +460,9 @@ export default defineContentScript({
     }
 
     async function refreshBatchPreviewToOverlay() {
+      const authHeaders = await getFreshAuthHeaders();
+      // Latency probe is independent of the batch-preview fetch.
+      measurePayPreviewLatency(authHeaders);
       const fresh = await fetchBatchPreviewWithAuth();
       if (fresh && fresh.length > 0) {
         postToOverlay({ type: 'BATCH_PREVIEW_DATA', data: fresh });

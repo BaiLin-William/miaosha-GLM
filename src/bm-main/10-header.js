@@ -468,7 +468,7 @@ function _h1_updateLatency() {
   if (_h1_rt.calibratedAt <= 0) {
     dot.className = 'bmh-dot';
     latVal.innerHTML = '--<i>ms</i>';
-    latEl.setAttribute('data-tip', 'Latency not measured yet\nMeasured as RTT of the last POST /api/biz/pay/batch-preview call.');
+    latEl.setAttribute('data-tip', 'Latency not measured yet\nMeasured as RTT of a POST /api/biz/pay/preview probe call (fake captcha).');
     return;
   }
   var cls = _h1_latencyClass(_h1_rt.latencyMs);
@@ -478,10 +478,10 @@ function _h1_updateLatency() {
   latEl.setAttribute('data-tip',
     'Network latency\n' +
     'Value: ' + _h1_rt.latencyMs + ' ms\n' +
-    'Source: ' + (_h1_rt.reason || 'batch-preview') + '\n' +
+    'Source: ' + (_h1_rt.reason || 'pay-preview') + '\n' +
     'Measured: ' + ageSec + ' s ago\n\n' +
-    'Method: RTT of a real POST /api/biz/pay/batch-preview call.\n' +
-    'Auto-fire fires this many ms before target time so the request reaches the server at sale open.'
+    'Method: RTT of a POST /api/biz/pay/preview probe call using a fake captcha ticket.\n' +
+    'Auto-fire fires at target time minus this latency.'
   );
 }
 

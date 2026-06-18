@@ -35,7 +35,7 @@ window.addEventListener('message', function(ev) {
 
 // ── Runtime state (latency calibration + auto-fire scheduler) ──
 var _rt = {
-  latencyMs: 0,       // RTT measured from real batch-preview calls
+  latencyMs: 0,       // RTT measured from a fake-captcha /api/biz/pay/preview probe
   nextSaleTime: 0,    // next sale epoch ms (UTC)
   autoTimer: null,    // setTimeout handle for auto-fire
   countdownTimer: null, // setInterval handle for countdown display

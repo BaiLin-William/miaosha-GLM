@@ -258,10 +258,32 @@ function renderProductsLoading() {
   if (tag) { tag.textContent = 'LOADING'; tag.className = 'tg tg-a'; }
 }
 
+function measurePayPreviewLatency(auth) {
+  if (!auth) return;
+  var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  fetch('/api/biz/pay/preview', {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json;charset=UTF-8',
+      'authorization': auth.authorization,
+      'bigmodel-organization': auth.bigmodelOrganization,
+      'bigmodel-project': auth.bigmodelProject
+    },
+    body: JSON.stringify({ productId: 'fake-product-id', ticket: 'fake-ticket', randstr: 'fake-randstr' })
+  })
+    .then(function() {})
+    .catch(function() {})
+    .finally(function() {
+      var t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      var rttMs = Math.round(t1 - t0);
+      applyRuntimeCalibration({ latencyMs: rttMs, calibratedAt: Date.now(), source: 'pay-preview' });
+    });
+}
+
 function fetchBatchPreview() {
   var auth = getLocalAuthHeaders();
   if (!auth) return;
-  var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   fetch('/api/biz/pay/batch-preview', {
     method: 'POST',
     credentials: 'include',
@@ -277,9 +299,6 @@ function fetchBatchPreview() {
       return r.json();
     })
     .then(function(d) {
-      var t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-      var rttMs = Math.round(t1 - t0);
-      applyRuntimeCalibration({ latencyMs: rttMs, calibratedAt: Date.now(), source: 'batch-preview' });
       if (d.code === 200 && d.data && d.data.productList) {
         _authFailed = false;
         try { sessionStorage.setItem('bm_batch_preview', JSON.stringify(d)); } catch(e) {}
@@ -293,7 +312,13 @@ function fetchBatchPreview() {
         renderProductsAuthError();
       }
     })
-    .catch(function() {});
+    .catch(function() {})
+    .finally(function() {
+      // Guard against an indefinite spinner if the server never returns usable data.
+      if (!_authFailed && !getVisibleProducts().length) {
+        renderProducts();
+      }
+    });
 }
 
 function renderProductsAuthError() {
@@ -432,4 +457,8 @@ function setupProductUI() {
   fetchBatchPreview();
   cmdToOverlay('REQUEST_BATCH_PREVIEW');
   renderFireConfig();
+
+  // Latency probe is independent of product rendering; run it last so it
+  // can never block or delay the product list from populating.
+  measurePayPreviewLatency(getLocalAuthHeaders());
 }
