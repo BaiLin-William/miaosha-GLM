@@ -82,6 +82,16 @@ function isExtensionContextValid(): boolean {
   }
 }
 
+// ── Safe storage wrapper (module-scope so reminder helpers can use it) ────────
+async function safeGet<T>(key: string): Promise<T | null> {
+  if (!isExtensionContextValid()) return null;
+  try { return await storage.getItem<T>(key); } catch { return null; }
+}
+async function safeSet(key: string, value: any): Promise<void> {
+  if (!isExtensionContextValid()) return;
+  try { await storage.setItem(key, value); } catch {}
+}
+
 // ── R3: Flash Sale Reminder ──────────────────────────────────────────────────
 
 interface ReminderState {
@@ -321,16 +331,6 @@ export default defineContentScript({
     script.src = chrome.runtime.getURL('/bm-main.js');
     script.onload = () => script.remove();
     (document.head || document.documentElement).appendChild(script);
-
-    // ── Safe storage wrapper ──
-    async function safeGet<T>(key: string): Promise<T | null> {
-      if (!isExtensionContextValid()) return null;
-      try { return await storage.getItem<T>(key); } catch { return null; }
-    }
-    async function safeSet(key: string, value: any): Promise<void> {
-      if (!isExtensionContextValid()) return;
-      try { await storage.setItem(key, value); } catch {}
-    }
 
     async function captureAuthFromPage() {
       try {
