@@ -14,15 +14,10 @@ function scheduleAutoFire(nextSaleTime) {
   // Auto-fire timing: we want the first request to *arrive* at the server as
   // close to sale time as possible. latencyMs is a round-trip measurement;
   // compensate for one-way delay (RTT/2) plus a small safety buffer for
-  // setTimeout jitter and network variance. Advanced strategy fields allow
-  // fine-tuning the first shot relative to the target sale time.
+  // setTimeout jitter and network variance.
   var EARLY_MS = 40;
   var oneWayLatency = Math.round((_rt.latencyMs || 0) / 2);
-  var offsetMs = (_fireConfig && _fireConfig.firstShotOffsetMs) || 0;
-  var staggerMs = (_fireConfig && _fireConfig.staggerWindowMs) || 0;
-  var jitter = staggerMs > 0 ? Math.floor(Math.random() * (staggerMs + 1)) : 0;
-  var fireAtLocal = nextSaleTime - oneWayLatency - EARLY_MS + offsetMs + jitter;
-  if (fireAtLocal < Date.now()) fireAtLocal = Date.now();
+  var fireAtLocal = nextSaleTime - oneWayLatency - EARLY_MS;
   var delay = fireAtLocal - Date.now();
 
   var autoEl = document.getElementById('_auto');
@@ -45,8 +40,7 @@ function scheduleAutoFire(nextSaleTime) {
       if (autoEl2) autoEl2.textContent = 'Firing…';
     } else {
       var secs = (remaining / 1000).toFixed(1);
-      var offsetLabel = offsetMs ? (' (' + (offsetMs > 0 ? '+' : '') + offsetMs + 'ms)') : '';
-      if (autoEl2) autoEl2.textContent = 'T−' + secs + 's' + offsetLabel;
+      if (autoEl2) autoEl2.textContent = 'T−' + secs + 's';
     }
   }, 100);
 
@@ -70,11 +64,7 @@ function dispatchAutoFire() {
   var autoEl = document.getElementById('_auto');
   if (autoEl) autoEl.textContent = 'Fired @ ' + ts.slice(11);
   var oneWayLatency = Math.round((_rt.latencyMs || 0) / 2);
-  var offsetMs = (_fireConfig && _fireConfig.firstShotOffsetMs) || 0;
-  var staggerMs = (_fireConfig && _fireConfig.staggerWindowMs) || 0;
-  var jitter = staggerMs > 0 ? Math.floor(Math.random() * (staggerMs + 1)) : 0;
-  var startMs = _rt.nextSaleTime - oneWayLatency - 40 + offsetMs + jitter;
-  if (startMs < Date.now()) startMs = Date.now();
+  var startMs = _rt.nextSaleTime - oneWayLatency - 40;
   window.postMessage({ __miaosha_cmd: true, type: 'PREFIRE_FIRE', data: { startMs: startMs, reason: 'auto' } }, '*');
 }
 

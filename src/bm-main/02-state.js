@@ -96,16 +96,4 @@ var _priorityList = []; // ordered priority list of { productId }
 var _ticketCount = 0;
 var _tickets = []; // per-ticket lifecycle list from content script
 var _planOrder = ['Lite', 'Pro', 'Max'];
-var _fireConfig = {
-  mode: 'auto',
-  payType: 'ALI',
-  burstIntervalMs: 2100,
-  firstShotOffsetMs: 0,
-  staggerWindowMs: 0,
-  allocation: [100],
-  backoff500Ms: 1200,
-  backoff555Ms: 200,
-  maxBackoffMs: 4000,
-  soldoutStopThreshold: 2,
-  enableDynamicSwitch: true,
-};
+var _fireConfig = { mode: 'auto', payType: 'ALI', burstIntervalMs: 2100 };

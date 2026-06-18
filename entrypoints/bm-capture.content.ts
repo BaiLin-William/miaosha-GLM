@@ -2,7 +2,7 @@
 // Injects MAIN world XHR interceptor and relays payment/ticket data to WXT storage
 // Also implements R3: Tab Audio+Visual reminder when user is on bigmodel.cn
 import { storage } from '#imports';
-import { buildStrikeQueue, replanStrikeQueue, type StrikePlan, type StrikeShot, type StrikeTarget } from '../lib/api/fire-plan';
+import { buildStrikeQueue, type StrikeShot, type StrikeTarget } from '../lib/api/fire-plan';
 import { fireStore, FIRE_CONFIG_DEFAULT, type FireConfig } from '../lib/settings/fire';
 import { SALE_ALARM_MINUTES, SALE_TIME_DEFAULT, getNextSaleTime, saleTimeStore, type SaleTimeConfig } from '../lib/settings/sale-time';
 import { captchaStore } from '../lib/settings/captcha';
@@ -560,8 +560,7 @@ export default defineContentScript({
         return;
       }
 
-      const originalTargets = targets.slice(0, 3);
-      const plan = buildStrikeQueue({ tickets: valid, targets: originalTargets, allocation: fireConfig.allocation });
+      const plan = buildStrikeQueue({ tickets: valid, targets });
       if (plan.shots.length === 0) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> Strike queue empty' });
         return;
@@ -575,21 +574,15 @@ export default defineContentScript({
       postToOverlay({ type: 'TICKET_COUNT', count: remainingInfo.count, tickets: remainingInfo.tickets });
 
       const burstIntervalMs = Math.max(50, Math.round(fireConfig.burstIntervalMs) || 2100);
-      const maxBackoffMs = Math.max(burstIntervalMs, Math.round(fireConfig.maxBackoffMs) || 4000);
-      const backoff500Ms = Math.max(0, Math.round(fireConfig.backoff500Ms) || 1200);
-      const backoff555Ms = Math.max(0, Math.round(fireConfig.backoff555Ms) || 200);
-      const soldoutStopThreshold = Math.max(1, Math.round(fireConfig.soldoutStopThreshold) || 2);
-      const enableDynamicSwitch = fireConfig.enableDynamicSwitch !== false;
-
       postToOverlay({
         type: 'FIRE_RESULT',
-        line: `> Strike ${plan.shots.length} shots · allocation [${plan.allocation.join('/')}]`,
+        line: `> Strike ${plan.shots.length} shots · burst`,
       });
       postToOverlay({
         type: 'FIRE_BATCH_START',
         data: {
-          queue: plan.shots.map((shot) => ({
-            shotIdx: shot.shotIndex,
+          queue: plan.shots.map((shot, idx) => ({
+            shotIdx: idx,
             productId: shot.productId,
             priority: shot.priority,
             ticketMask: maskTicket(shot.ticket),
@@ -598,10 +591,6 @@ export default defineContentScript({
           startMs,
           mode: fireConfig.mode === 'manual' ? 'manual' : 'auto',
           burstIntervalMs,
-          firstShotOffsetMs: fireConfig.firstShotOffsetMs,
-          staggerWindowMs: fireConfig.staggerWindowMs,
-          allocation: plan.allocation,
-          enableDynamicSwitch,
         },
       });
 
@@ -621,83 +610,6 @@ export default defineContentScript({
 
       const total = plan.shots.length;
       let succeeded = false;
-
-      // ── Strategy state ──
-      let shots: StrikeShot[] = plan.shots.slice();
-      let aliveTargets: StrikeTarget[] = plan.targets.slice();
-      const deprioritized = new Set<string>();
-      let currentInterval = burstIntervalMs;
-      let consec500 = 0;
-      let consec555 = 0;
-      const soldoutCounts = new Map<string, number>();
-      const firedByTarget = new Map<string, number>();
-      const allocatedByTarget = new Map<string, number>();
-      for (const t of originalTargets) {
-        const count = shots.filter((s) => s.productId === t.productId).length;
-        allocatedByTarget.set(t.productId, count);
-      }
-
-      function emitAllocationUpdate(reason?: string) {
-        const targetsData = originalTargets.map((t) => {
-          const allocated = allocatedByTarget.get(t.productId) || 0;
-          const fired = firedByTarget.get(t.productId) || 0;
-          const remaining = shots.filter((s) => s.productId === t.productId).length;
-          return { productId: t.productId, priority: t.priority, allocated, fired, remaining };
-        });
-        postToOverlay({ type: 'FIRE_ALLOCATION_UPDATE', data: { targets: targetsData, reason } });
-      }
-
-      function applyBackoff(previous: number, added: number): number {
-        return Math.min(maxBackoffMs, previous + added);
-      }
-
-      function resetBackoff() {
-        if (currentInterval !== burstIntervalMs) {
-          const prev = currentInterval;
-          currentInterval = burstIntervalMs;
-          consec500 = 0;
-          consec555 = 0;
-          postToOverlay({
-            type: 'FIRE_BACKOFF_UPDATE',
-            data: { currentInterval, previousInterval: prev, addedMs: 0, reason: 'reset' },
-          });
-        }
-      }
-
-      function handleSoldout(shot: StrikeShot) {
-        const count = (soldoutCounts.get(shot.productId) || 0) + 1;
-        soldoutCounts.set(shot.productId, count);
-        if (count >= soldoutStopThreshold) {
-          const removedIdx = aliveTargets.findIndex((t) => t.productId === shot.productId);
-          if (removedIdx >= 0) {
-            const removed = aliveTargets.splice(removedIdx, 1)[0];
-            deprioritized.delete(removed.productId);
-            const nextPrimary = aliveTargets[0];
-            postToOverlay({
-              type: 'FIRE_TARGET_SWITCH',
-              data: {
-                fromProductId: removed.productId,
-                toProductId: nextPrimary?.productId || '',
-                reason: 'soldout',
-              },
-            });
-            postToOverlay({
-              type: 'FIRE_RESULT',
-              line: `> Target switch: ${removed.productId.slice(-6)} soldout → ${nextPrimary ? nextPrimary.productId.slice(-6) : 'none'}`,
-            });
-            if (enableDynamicSwitch && aliveTargets.length > 0 && shots.length > 0) {
-              const replanned = replanStrikeQueue(shots, aliveTargets, plan.allocation);
-              shots = replanned.shots;
-              // Recount allocations
-              for (const t of originalTargets) allocatedByTarget.set(t.productId, 0);
-              for (const t of aliveTargets) {
-                allocatedByTarget.set(t.productId, shots.filter((s) => s.productId === t.productId).length);
-              }
-              emitAllocationUpdate('replan');
-            }
-          }
-        }
-      }
 
       const fireOne = async (shot: StrikeShot, idx: number): Promise<string> => {
         if (cancelled) return 'cancelled';
@@ -719,8 +631,6 @@ export default defineContentScript({
           if (cancelled) return 'cancelled';
           const body = await res.json();
           const rtt = Date.now() - t1;
-
-          firedByTarget.set(shot.productId, (firedByTarget.get(shot.productId) || 0) + 1);
 
           if (body.code === 200 && body.data && !body.data.soldOut && body.data.bizId) {
             succeeded = true;
@@ -763,82 +673,79 @@ export default defineContentScript({
           } else if (body.code === 200 && body.data?.soldOut) {
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': sold-out today (' + rtt + 'ms)' });
             postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'soldout', code: 200, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), serverMsg: body.msg || 'sold out' } });
-            handleSoldout(shot);
             return 'soldout';
           } else if (body.code === 555) {
-            consec555++;
-            consec500 = 0;
-            deprioritized.add(shot.productId);
-            const prev = currentInterval;
-            currentInterval = applyBackoff(currentInterval, backoff555Ms);
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': server-busy-555 (' + rtt + 'ms)' });
             postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'busy', code: 555, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), serverMsg: body.msg || 'server busy' } });
-            postToOverlay({
-              type: 'FIRE_BACKOFF_UPDATE',
-              data: { currentInterval, previousInterval: prev, addedMs: backoff555Ms, reason: '555-rate' },
-            });
             return 'busy';
           } else {
-            const isVerifyOverload = body.code === 500 && typeof body.msg === 'string' && body.msg.includes('验证码校验服务异常');
-            if (isVerifyOverload) {
-              consec500++;
-              consec555 = 0;
-              const prev = currentInterval;
-              currentInterval = applyBackoff(currentInterval, backoff500Ms);
-              postToOverlay({
-                type: 'FIRE_BACKOFF_UPDATE',
-                data: { currentInterval, previousInterval: prev, addedMs: backoff500Ms, reason: '500-verify' },
-              });
-            } else {
-              resetBackoff();
-            }
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': code=' + body.code + ' ' + (body.msg || '') + ' (' + rtt + 'ms)' });
             postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'error', code: body.code, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), serverMsg: body.msg || '' } });
             return 'error';
           }
         } catch (e: any) {
           if (e?.name === 'AbortError' || cancelled) return 'cancelled';
-          resetBackoff();
           postToOverlay({ type: 'FIRE_RESULT', line: tag + ': net-err: ' + (e?.message || 'unknown') });
           postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'neterr', rtt: Date.now() - t1, sentAt: t1, ticketMask: maskTicket(shot.ticket), serverMsg: e?.message || 'unknown' } });
           return 'neterr';
         }
       };
 
+      // Adaptive scheduling: after each shot, decide when to fire the next one.
+      // - Consecutive 555s back off by +200ms (max 3000ms) to reduce wasted tickets.
+      // - Consecutive soldouts stop early (>=3) since inventory is likely gone.
       const baseDelay = Math.max(0, startMs - Date.now());
-      let firstShotFired = false;
+      let currentInterval = burstIntervalMs;
+      let consecutiveSoldout = 0;
+      let consecutiveBusy = 0;
+      let shotIdx = 0;
+      const SOLDOUT_STOP_THRESHOLD = 3;
+      const BUSY_BACKOFF_MS = 200;
+      const MAX_INTERVAL_MS = 3000;
 
       const scheduleNext = () => {
-        if (cancelled || succeeded || shots.length === 0) {
+        if (cancelled || succeeded || shotIdx >= total) {
           if (!succeeded && !cancelled) {
             cancelAll();
-            const fired = total - shots.length;
-            postToOverlay({ type: 'FIRE_RESULT', line: '> Strike complete — ammo depleted (' + fired + '/' + total + ' shots)' });
-            postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total: fired } });
+            postToOverlay({ type: 'FIRE_RESULT', line: '> Strike complete — ammo depleted (' + total + ' shots)' });
+            postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total } });
           }
           return;
         }
 
-        const shot = shots.shift()!;
-        const idx = shot.shotIndex;
-        const isFirst = !firstShotFired;
-        firstShotFired = true;
-        const delay = isFirst ? baseDelay : currentInterval;
-
+        const shot = plan.shots[shotIdx];
+        const idx = shotIdx;
+        shotIdx++;
         timers.push(
           setTimeout(async () => {
             const outcome = await fireOne(shot, idx);
-            if (outcome === 'success' || cancelled || succeeded) return;
-            // Reset backoff when we leave the rate-limit / verify-overload paths.
-            if (outcome !== 'busy' && outcome !== 'error') {
-              resetBackoff();
+            if (outcome === 'soldout') {
+              consecutiveSoldout++;
+              consecutiveBusy = 0;
+            } else if (outcome === 'busy') {
+              consecutiveBusy++;
+              consecutiveSoldout = 0;
+              if (consecutiveBusy >= 2) {
+                currentInterval = Math.min(MAX_INTERVAL_MS, currentInterval + BUSY_BACKOFF_MS);
+                postToOverlay({ type: 'FIRE_RESULT', line: `> 555 backoff: interval increased to ${currentInterval}ms` });
+              }
+            } else {
+              consecutiveSoldout = 0;
+              consecutiveBusy = 0;
             }
+
+            if (consecutiveSoldout >= SOLDOUT_STOP_THRESHOLD) {
+              cancelAll();
+              postToOverlay({ type: 'FIRE_RESULT', line: `> Stopping early: ${SOLDOUT_STOP_THRESHOLD} consecutive soldout` });
+              postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total: idx + 1 } });
+              return;
+            }
+
             scheduleNext();
-          }, delay),
+          }, shotIdx === 1 ? baseDelay : currentInterval),
         );
       };
 
-      emitAllocationUpdate('start');
       scheduleNext();
     }
 
@@ -910,40 +817,12 @@ export default defineContentScript({
           } catch {
             current = { ...FIRE_CONFIG_DEFAULT };
           }
-          function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
-            const n = Math.round(Number(value));
-            return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
-          }
-          function normalizeIncomingAllocation(value: unknown): number[] {
-            if (!Array.isArray(value)) return current.allocation;
-            const nums = value.slice(0, 3).map((v) => {
-              const n = Math.round(Number(v));
-              return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
-            });
-            const sum = nums.reduce((a, b) => a + b, 0);
-            if (sum === 0) return current.allocation;
-            if (sum === 100) return nums;
-            const normalized = nums.map((v) => Math.round((v / sum) * 100));
-            const normSum = normalized.reduce((a, b) => a + b, 0);
-            if (normSum !== 100 && normalized[0] != null) normalized[0] += 100 - normSum;
-            return normalized;
-          }
-
           const next: FireConfig = {
             mode: incoming.mode === 'manual' ? 'manual' : 'auto',
             payType: incoming.payType === 'WE_CHAT' ? 'WE_CHAT' : 'ALI',
             burstIntervalMs: Number.isFinite(Number(incoming.burstIntervalMs))
               ? Math.max(50, Math.round(Number(incoming.burstIntervalMs)))
               : current.burstIntervalMs,
-
-            firstShotOffsetMs: clampNumber(incoming.firstShotOffsetMs, -5000, 5000, current.firstShotOffsetMs),
-            staggerWindowMs: clampNumber(incoming.staggerWindowMs, 0, 3000, current.staggerWindowMs),
-            allocation: normalizeIncomingAllocation(incoming.allocation),
-            backoff500Ms: clampNumber(incoming.backoff500Ms, 500, 5000, current.backoff500Ms),
-            backoff555Ms: clampNumber(incoming.backoff555Ms, 0, 2000, current.backoff555Ms),
-            maxBackoffMs: clampNumber(incoming.maxBackoffMs, 2100, 8000, current.maxBackoffMs),
-            soldoutStopThreshold: clampNumber(incoming.soldoutStopThreshold, 1, 5, current.soldoutStopThreshold),
-            enableDynamicSwitch: typeof incoming.enableDynamicSwitch === 'boolean' ? incoming.enableDynamicSwitch : current.enableDynamicSwitch,
           };
           try {
             if (isExtensionContextValid()) await fireStore.set(next);

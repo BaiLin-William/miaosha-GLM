@@ -48,8 +48,8 @@ describe('buildStrikeQueue', () => {
       ],
     });
     const order = plan.shots.map((s) => s.productId);
-    // 70/30 allocation: 6 tickets -> P1=5, P2=1, all P1 first
-    expect(order).toEqual(['p1', 'p1', 'p1', 'p1', 'p1', 'p2']);
+    // [P1, P1, P2, P1, P2] repeated
+    expect(order).toEqual(['p1', 'p1', 'p2', 'p1', 'p2', 'p1']);
   });
 
   it('front-loads P1 with 3 targets', () => {
@@ -62,10 +62,10 @@ describe('buildStrikeQueue', () => {
       ],
     });
     const order = plan.shots.map((s) => s.productId);
-    // 70/20/10 allocation: 10 tickets -> P1=7, P2=2, P3=1
+    // [P1, P1, P2, P1, P3] x2
     expect(order).toEqual([
-      'p1', 'p1', 'p1', 'p1', 'p1', 'p1', 'p1',
-      'p2', 'p2', 'p3',
+      'p1', 'p1', 'p2', 'p1', 'p3',
+      'p1', 'p1', 'p2', 'p1', 'p3',
     ]);
   });
 

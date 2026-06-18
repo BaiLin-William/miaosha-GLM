@@ -20,15 +20,11 @@ describe('fireStore', () => {
     expect(cfg).toEqual(FIRE_CONFIG_DEFAULT);
   });
 
-  it('persists a custom config and merges with defaults', async () => {
+  it('persists a custom config', async () => {
     const custom = { mode: 'manual' as const, payType: 'WE_CHAT' as const, burstIntervalMs: 2300 };
     await fireStore.set(custom);
     const retrieved = await fireStore.get();
-    expect(retrieved).toEqual({
-      ...FIRE_CONFIG_DEFAULT,
-      ...custom,
-      enableDynamicSwitch: false, // omitted booleans are normalized to false on save
-    });
+    expect(retrieved).toEqual(custom);
   });
 
   it('falls back unknown enum values to defaults', async () => {

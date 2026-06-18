@@ -41,13 +41,6 @@ function buildHTML() {
     '<div id="_fireCfg"></div>' +
     '<div class="fc-row"><span class="fc-lbl">Mode<span class="fc-tip" data-tip="决定“什么时候发射”。Auto：插件自动倒计时并在秒杀时刻前根据实测延迟提前触发。Manual：禁用自动，只有点击 FIRE 才发射。推荐：Auto。">?</span></span><select class="fc-sel" id="_fireMode"><option value="auto">Auto</option><option value="manual">Manual</option></select></div>' +
     '<div class="fc-row"><span class="fc-lbl">Burst Interval<span class="fc-tip" data-tip="Burst 模式下每枪之间的间隔（毫秒）。智谱后端使用 2 秒滑动窗口限流（阈值=1），低于 2 秒会触发大量 555。实测 2100ms 是单用户最优节奏：0% 555 且比 3000ms 快 31%。">?</span></span><input class="fc-num" id="_fireBurstInterval" type="number" min="500" max="10000" step="100" value="2100"></div>' +
-    '<div class="fc-row"><span class="fc-lbl">First Shot Offset<span class="fc-tip" data-tip="首枪相对 10:00:00.000 的偏移（毫秒）。负值提前发射以抢先进入窗口，正值延后以避开 1000 QPS 峰值。推荐：-50 ~ +100。">?</span></span><input class="fc-num" id="_fireOffset" type="number" min="-5000" max="5000" step="10" value="0"></div>' +
-    '<div class="fc-row"><span class="fc-lbl">Stagger Window<span class="fc-tip" data-tip="首枪抖动窗（毫秒）。实际首枪时刻 = 目标时刻 + 偏移 + random(0, 窗口)。用于把请求打散，避免所有用户挤在绝对零点。推荐：0 ~ 200。">?</span></span><input class="fc-num" id="_fireStagger" type="number" min="0" max="3000" step="50" value="0"></div>' +
-    '<div class="fc-row"><span class="fc-lbl">Backoff 500<span class="fc-tip" data-tip="遇到 code=500 “验证码校验服务异常”（腾讯核销层过载）时，每次增加的退避毫秒数。推荐：1000 ~ 1500。">?</span></span><input class="fc-num" id="_fireB500" type="number" min="500" max="5000" step="100" value="1200"></div>' +
-    '<div class="fc-row"><span class="fc-lbl">Backoff 555<span class="fc-tip" data-tip="遇到 code=555（智谱 2 秒滑动窗口限流）时，每次增加的退避毫秒数。推荐：200。">?</span></span><input class="fc-num" id="_fireB555" type="number" min="0" max="2000" step="50" value="200"></div>' +
-    '<div class="fc-row"><span class="fc-lbl">Max Backoff<span class="fc-tip" data-tip="动态间隔上限（毫秒）。无论触发多少次退避，间隔都不会超过此值。推荐：4000。">?</span></span><input class="fc-num" id="_fireMaxB" type="number" min="2100" max="8000" step="100" value="4000"></div>' +
-    '<div class="fc-row"><span class="fc-lbl">Soldout Threshold<span class="fc-tip" data-tip="同一商品连续 soldout 多少次后，将其移出轮换并把剩余 ticket 重新分配给存活商品。推荐：2。">?</span></span><input class="fc-num" id="_fireSoldout" type="number" min="1" max="5" step="1" value="2"></div>' +
-    '<div class="fc-row"><span class="fc-lbl">Dynamic Switch<span class="fc-tip" data-tip="开启后，soldout 商品会被自动移出并触发 ticket 重分配；关闭则保持原队列直到打完或手动停止。">?</span></span><input type="checkbox" id="_fireDynSwitch" checked></div>' +
     '<div class="fc-row"><span class="fc-lbl">Pay<span class="fc-tip" data-tip="create-sign 使用的支付方式，决定打开支付宝还是微信支付。推荐：ALI（Alipay）。">?</span></span><select class="fc-sel" id="_firePayType"><option value="ALI">Alipay</option><option value="WE_CHAT">WeChat</option></select></div>' +
     '<button class="fb" id="_fb" disabled>&#9889; FIRE (0)</button>' +
     '<div style="font-size:8px;color:#64748b;text-align:center;padding:3px 0" id="_ammo"></div>' +
@@ -104,84 +97,20 @@ function applyFireConfigToControls(config) {
   var mode = document.getElementById('_fireMode');
   var burstInterval = document.getElementById('_fireBurstInterval');
   var payType = document.getElementById('_firePayType');
-  var offset = document.getElementById('_fireOffset');
-  var stagger = document.getElementById('_fireStagger');
-  var b500 = document.getElementById('_fireB500');
-  var b555 = document.getElementById('_fireB555');
-  var maxB = document.getElementById('_fireMaxB');
-  var soldout = document.getElementById('_fireSoldout');
-  var dynSwitch = document.getElementById('_fireDynSwitch');
   if (mode) mode.value = config.mode === 'manual' ? 'manual' : 'auto';
   if (burstInterval) burstInterval.value = String(Math.max(500, Math.min(10000, Math.round(Number(config.burstIntervalMs)) || 2100)));
   if (payType) payType.value = config.payType === 'WE_CHAT' ? 'WE_CHAT' : 'ALI';
-  if (offset) offset.value = String(Math.max(-5000, Math.min(5000, Math.round(Number(config.firstShotOffsetMs)) || 0)));
-  if (stagger) stagger.value = String(Math.max(0, Math.min(3000, Math.round(Number(config.staggerWindowMs)) || 0)));
-  if (b500) b500.value = String(Math.max(500, Math.min(5000, Math.round(Number(config.backoff500Ms)) || 1200)));
-  if (b555) b555.value = String(Math.max(0, Math.min(2000, Math.round(Number(config.backoff555Ms)) || 200)));
-  if (maxB) maxB.value = String(Math.max(2100, Math.min(8000, Math.round(Number(config.maxBackoffMs)) || 4000)));
-  if (soldout) soldout.value = String(Math.max(1, Math.min(5, Math.round(Number(config.soldoutStopThreshold)) || 2)));
-  if (dynSwitch) dynSwitch.checked = config.enableDynamicSwitch !== false;
-  for (var ai = 0; ai < 3; ai++) {
-    var ael = document.getElementById('_fireAlloc' + ai);
-    if (ael && Array.isArray(config.allocation) && config.allocation[ai] != null) {
-      ael.value = String(Math.max(0, Math.min(100, Math.round(Number(config.allocation[ai])) || 0)));
-    }
-  }
-}
-
-function normalizeAllocationArray(arr, targetCount) {
-  if (!Array.isArray(arr) || arr.length === 0) {
-    return targetCount === 1 ? [100] : targetCount === 2 ? [70, 30] : [70, 20, 10];
-  }
-  var nums = arr.slice(0, targetCount).map(function(v) {
-    var n = Math.round(Number(v));
-    return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
-  });
-  while (nums.length < targetCount) nums.push(0);
-  var sum = nums.reduce(function(a, b) { return a + b; }, 0);
-  if (sum === 0) return targetCount === 1 ? [100] : targetCount === 2 ? [70, 30] : [70, 20, 10];
-  if (sum === 100) return nums;
-  var normalized = nums.map(function(v) { return Math.round((v / sum) * 100); });
-  var normSum = normalized.reduce(function(a, b) { return a + b; }, 0);
-  if (normSum !== 100 && normalized[0] != null) normalized[0] += 100 - normSum;
-  return normalized;
 }
 
 function readFireConfigFromControls() {
   var mode = document.getElementById('_fireMode');
   var burstInterval = document.getElementById('_fireBurstInterval');
   var payType = document.getElementById('_firePayType');
-  var offset = document.getElementById('_fireOffset');
-  var stagger = document.getElementById('_fireStagger');
-  var b500 = document.getElementById('_fireB500');
-  var b555 = document.getElementById('_fireB555');
-  var maxB = document.getElementById('_fireMaxB');
-  var soldout = document.getElementById('_fireSoldout');
-  var dynSwitch = document.getElementById('_fireDynSwitch');
-
-  var targetCount = Math.max(1, (_priorityList || []).length);
-  var allocInputs = [
-    document.getElementById('_fireAlloc0'),
-    document.getElementById('_fireAlloc1'),
-    document.getElementById('_fireAlloc2'),
-  ].slice(0, targetCount);
-  var allocation = allocInputs.map(function(el) {
-    return Math.round(Number(el ? el.value : 0));
-  });
-
   return {
     ...(_fireConfig || { burstIntervalMs: 2100 }),
     mode: mode && mode.value === 'manual' ? 'manual' : 'auto',
     burstIntervalMs: Math.max(500, Math.min(10000, Math.round(Number(burstInterval ? burstInterval.value : 2100)) || 2100)),
     payType: payType && payType.value === 'WE_CHAT' ? 'WE_CHAT' : 'ALI',
-    firstShotOffsetMs: Math.max(-5000, Math.min(5000, Math.round(Number(offset ? offset.value : 0)) || 0)),
-    staggerWindowMs: Math.max(0, Math.min(3000, Math.round(Number(stagger ? stagger.value : 0)) || 0)),
-    allocation: normalizeAllocationArray(allocation, targetCount),
-    backoff500Ms: Math.max(500, Math.min(5000, Math.round(Number(b500 ? b500.value : 1200)) || 1200)),
-    backoff555Ms: Math.max(0, Math.min(2000, Math.round(Number(b555 ? b555.value : 200)) || 200)),
-    maxBackoffMs: Math.max(2100, Math.min(8000, Math.round(Number(maxB ? maxB.value : 4000)) || 4000)),
-    soldoutStopThreshold: Math.max(1, Math.min(5, Math.round(Number(soldout ? soldout.value : 2)) || 2)),
-    enableDynamicSwitch: dynSwitch ? !!dynSwitch.checked : true,
   };
 }
 
@@ -192,15 +121,11 @@ function sendFireConfigUpdate() {
 }
 
 function bindFireControlEvents() {
-  var ids = ['_fireMode', '_fireBurstInterval', '_firePayType', '_fireOffset', '_fireStagger', '_fireB500', '_fireB555', '_fireMaxB', '_fireSoldout', '_fireDynSwitch'];
+  var ids = ['_fireMode', '_fireBurstInterval', '_firePayType'];
   for (var i = 0; i < ids.length; i++) {
     var el = document.getElementById(ids[i]);
     if (!el) continue;
     el.addEventListener('change', sendFireConfigUpdate);
-  }
-  for (var j = 0; j < 3; j++) {
-    var ael = document.getElementById('_fireAlloc' + j);
-    if (ael) ael.addEventListener('change', sendFireConfigUpdate);
   }
 }
 
@@ -265,7 +190,6 @@ function injectOverlay() {
     if (d.type === 'FIRE_CONFIG' && d.data) {
       _fireConfig = d.data;
       applyFireConfigToControls(d.data);
-      if (typeof renderFireConfig === 'function') renderFireConfig();
     }
 
     if (d.type === 'BURST_FIRE_SUCCESS' && d.data) {

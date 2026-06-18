@@ -12,10 +12,8 @@ var _fv_done     = 0;
 var _fv_logLines = [];
 var _fv_meta     = null;
 var _fv_dotEls   = {};
-var _fv_rowEls    = {};
-var _fv_eventRows = [];
+var _fv_rowEls   = {};
 var _fv_shotsData = [];
-var _fv_backoffMs = 0;
 
 var _FV_OUTCOME = {
   success: { user: '成功', dev: 'ORDER', color: '#059669', icon: '✓' },
@@ -140,9 +138,6 @@ function _fv_buildHTML() {
     '<div class="fv-stat" id="__bm_fv_sd" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#64748b;transition:background .15s">',
       '<span>⊘</span><span>售罄</span><b style="min-width:14px;text-align:center">0</b>',
     '</div>',
-    '<div class="fv-stat" id="__bm_fv_boff" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#7c3aed;transition:background .15s">',
-      '<span>⏱</span><span>退避</span><b style="min-width:14px;text-align:center">0ms</b>',
-    '</div>',
     '<span id="__bm_fv_st" style="font-size:9px;color:#94a3b8;margin-left:auto">0ms</span>',
     '</div>',
 
@@ -195,8 +190,6 @@ function _fv_show(data) {
   _fv_meta    = data || {};
   _fv_dotEls  = {};
   _fv_rowEls  = {};
-  _fv_eventRows = [];
-  _fv_backoffMs = (data && data.burstIntervalMs) || 0;
 
   _fv_renderDots();
   _fv_updateMeta();
@@ -240,20 +233,10 @@ function _fv_updateMeta() {
   if (!el || !_fv_meta) return;
   var mode = _fv_meta.mode === 'manual' ? 'MANUAL' : 'AUTO';
   var interval = (_fv_meta.burstIntervalMs || 2100) + 'ms';
-  var offsetMs = Number(_fv_meta.firstShotOffsetMs) || 0;
-  var staggerMs = Number(_fv_meta.staggerWindowMs) || 0;
-  var allocation = Array.isArray(_fv_meta.allocation) ? _fv_meta.allocation : [100];
-  var allocParts = [];
-  for (var i = 0; i < allocation.length; i++) {
-    allocParts.push('P' + (i + 1) + ' <b style="color:#1e293b">' + allocation[i] + '%</b>');
-  }
   var parts = [
     'Mode: <b style="color:#1e293b">' + mode + '</b>',
     _fv_total + ' shots',
-    'interval: <b style="color:#1e293b">' + interval + '</b>',
-    'offset: <b style="color:#1e293b">' + (offsetMs > 0 ? '+' : '') + offsetMs + 'ms</b>',
-    staggerMs > 0 ? ('stagger: <b style="color:#1e293b">0–' + staggerMs + 'ms</b>') : 'stagger: off',
-    allocParts.join(' · ')
+    'interval: <b style="color:#1e293b">' + interval + '</b>'
   ];
   el.innerHTML = parts.join(' <span style="color:#cbd5e1">·</span> ');
 }
@@ -302,30 +285,12 @@ function _fv_addTimelineRow(d) {
   row.title = tip;
 
   _fv_rowEls[idx] = row;
-  _fv_rebuildTimeline();
-}
 
-function _fv_addTimelineEvent(text, color) {
-  var wrap = document.getElementById('__bm_fv_timeline');
-  if (!wrap) return;
-  var row = document.createElement('div');
-  row.className = 'fv-row';
-  row.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;padding:3px 8px;border-radius:6px;background:rgba(99,102,241,.06);font-size:9px;transition:background .15s';
-  row.innerHTML = '<span style="color:' + (color || '#6366f1') + ';font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + _fv_escHtml(text) + '</span>';
-  _fv_eventRows.push(row);
-  _fv_rebuildTimeline();
-}
-
-function _fv_rebuildTimeline() {
-  var wrap = document.getElementById('__bm_fv_timeline');
-  if (!wrap) return;
+  // Rebuild in shot order
   wrap.innerHTML = '';
   var keys = Object.keys(_fv_rowEls).map(Number).sort(function(a, b) { return a - b; });
   for (var i = 0; i < keys.length; i++) {
     wrap.appendChild(_fv_rowEls[keys[i]]);
-  }
-  for (var j = 0; j < _fv_eventRows.length; j++) {
-    wrap.appendChild(_fv_eventRows[j]);
   }
   wrap.scrollTop = wrap.scrollHeight;
 }
@@ -339,8 +304,6 @@ function _fv_updateStats() {
   if (se) se.querySelector('b').textContent = String(_fv_counts.error + _fv_counts.neterr);
   var sd = document.getElementById('__bm_fv_sd');
   if (sd) sd.querySelector('b').textContent = String(_fv_counts.soldout);
-  var bo = document.getElementById('__bm_fv_boff');
-  if (bo) bo.querySelector('b').textContent = String(_fv_backoffMs) + 'ms';
   var st = document.getElementById('__bm_fv_st');
   if (st) st.textContent = (Date.now() - _fv_startMs) + 'ms';
 }
@@ -407,10 +370,6 @@ function _fv_downloadJson() {
       exportedAt: Date.now(),
       mode: _fv_meta.mode || 'unknown',
       burstIntervalMs: _fv_meta.burstIntervalMs || 0,
-      firstShotOffsetMs: _fv_meta.firstShotOffsetMs || 0,
-      staggerWindowMs: _fv_meta.staggerWindowMs || 0,
-      allocation: _fv_meta.allocation || [],
-      enableDynamicSwitch: _fv_meta.enableDynamicSwitch,
       totalShots: _fv_total,
       startMs: _fv_meta.startMs || _fv_startMs,
       elapsedMs: Date.now() - _fv_startMs
@@ -510,10 +469,6 @@ window.addEventListener('message', function(e) {
     _fv_addLine('⚙ CONFIG ' + JSON.stringify({
       mode: d.data.mode,
       burstIntervalMs: d.data.burstIntervalMs,
-      firstShotOffsetMs: d.data.firstShotOffsetMs,
-      staggerWindowMs: d.data.staggerWindowMs,
-      allocation: d.data.allocation,
-      enableDynamicSwitch: d.data.enableDynamicSwitch,
       totalShots: d.data.totalShots,
       startMs: d.data.startMs
     }), '#94a3b8');
@@ -532,37 +487,6 @@ window.addEventListener('message', function(e) {
     _fv_addTimelineRow(d.data);
     _fv_updateStats();
     _fv_updateProgress();
-    return;
-  }
-
-  if (d.type === 'FIRE_TARGET_SWITCH' && d.data) {
-    var fromName = _fv_productName(d.data.fromProductId);
-    var toName = _fv_productName(d.data.toProductId);
-    var reason = d.data.reason || 'replan';
-    _fv_addLine('↺ TARGET SWITCH · ' + fromName + ' → ' + toName + ' · ' + reason, '#6366f1');
-    _fv_addTimelineEvent('↺ ' + fromName + ' → ' + toName, '#6366f1');
-    return;
-  }
-
-  if (d.type === 'FIRE_BACKOFF_UPDATE' && d.data) {
-    _fv_backoffMs = Number(d.data.currentInterval) || 0;
-    _fv_updateStats();
-    var added = Number(d.data.addedMs) || 0;
-    var reason = d.data.reason || 'backoff';
-    _fv_addLine('⌁ BACKOFF · interval=' + _fv_backoffMs + 'ms (+' + added + 'ms · ' + reason + ')', '#d97706');
-    _fv_addTimelineEvent('⌁ backoff ' + _fv_backoffMs + 'ms', '#d97706');
-    return;
-  }
-
-  if (d.type === 'FIRE_ALLOCATION_UPDATE' && d.data && d.data.targets) {
-    var targets = d.data.targets;
-    var parts = [];
-    for (var k = 0; k < targets.length; k++) {
-      var t = targets[k];
-      parts.push(_fv_productName(t.productId) + ' ' + (t.allocated || 0));
-    }
-    _fv_addLine('⚖ ALLOCATION · ' + parts.join(' · '), '#94a3b8');
-    _fv_addTimelineEvent('⚖ alloc ' + parts.join(' · '), '#94a3b8');
     return;
   }
 

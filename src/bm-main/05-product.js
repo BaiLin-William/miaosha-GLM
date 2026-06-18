@@ -166,7 +166,6 @@ function persistSelection() {
 function toggleProductSelection(productId) {
   var idx = priorityIndexOf(productId);
   var maxFlash = document.getElementById('_prodTag');
-  var previousLen = _priorityList.length;
   if (idx >= 0) {
     _priorityList.splice(idx, 1);
   } else {
@@ -182,11 +181,6 @@ function toggleProductSelection(productId) {
   }
   persistSelection();
   renderProducts();
-  // Reset allocation to sensible defaults whenever the number of selected products changes.
-  if (_priorityList.length !== previousLen && typeof _fireConfig !== 'undefined') {
-    _fireConfig.allocation = defaultAllocation(_priorityList.length);
-    if (typeof sendFireConfigUpdate === 'function') sendFireConfigUpdate();
-  }
   renderFireConfig();
   syncSelectionStatus();
 }
@@ -367,29 +361,6 @@ function renderProducts() {
   }
 }
 
-function defaultAllocation(count) {
-  if (count === 1) return [100];
-  if (count === 2) return [70, 30];
-  return [70, 20, 10];
-}
-
-function normalizeAllocationValues(values, targetCount) {
-  var fallback = defaultAllocation(targetCount);
-  if (!Array.isArray(values) || values.length === 0) return fallback;
-  var nums = values.slice(0, targetCount).map(function(v) {
-    var n = Math.round(Number(v));
-    return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
-  });
-  while (nums.length < targetCount) nums.push(0);
-  var sum = nums.reduce(function(a, b) { return a + b; }, 0);
-  if (sum === 0) return fallback;
-  if (sum === 100) return nums;
-  var normalized = nums.map(function(v) { return Math.round((v / sum) * 100); });
-  var normSum = normalized.reduce(function(a, b) { return a + b; }, 0);
-  if (normSum !== 100 && normalized[0] != null) normalized[0] += 100 - normSum;
-  return normalized;
-}
-
 function renderFireConfig() {
   var body = document.getElementById('_fireCfg');
   if (!body) return;
@@ -398,8 +369,6 @@ function renderFireConfig() {
     return;
   }
 
-  var allocation = normalizeAllocationValues(_fireConfig.allocation, _priorityList.length);
-
   var html = '';
   for (var i = 0; i < _priorityList.length; i++) {
     var item = _priorityList[i];
@@ -407,24 +376,13 @@ function renderFireConfig() {
     var name = p ? p.name : item.productId.slice(-6);
     var price = p && p.price != null ? '¥' + formatAmount(p.price) + '/月' : '';
     var rankCls = i === 0 ? 'cfg-rk cfg-rk1' : (i === 1 ? 'cfg-rk cfg-rk2' : 'cfg-rk cfg-rk3');
-    var pct = allocation[i] ?? 0;
     html +=
       '<div class="cfg-sl">' +
         '<div class="' + rankCls + '">P' + (i + 1) + '</div>' +
         '<div class="cfg-n">' + name + '<span class="cfg-p">' + price + '</span></div>' +
-        '<input class="cfg-pct" id="_fireAlloc' + i + '" type="number" min="0" max="100" step="1" value="' + pct + '">%' +
       '</div>';
   }
   body.innerHTML = html;
-
-  // Bind allocation inputs to fire config update
-  for (var j = 0; j < _priorityList.length; j++) {
-    var el = document.getElementById('_fireAlloc' + j);
-    if (!el) continue;
-    el.addEventListener('change', function() {
-      if (typeof sendFireConfigUpdate === 'function') sendFireConfigUpdate();
-    });
-  }
 }
 
 function setupProductUI() {
