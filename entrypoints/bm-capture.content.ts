@@ -696,10 +696,8 @@ export default defineContentScript({
       // - Consecutive soldouts stop early (>=3) since inventory is likely gone.
       const baseDelay = Math.max(0, startMs - Date.now());
       let currentInterval = burstIntervalMs;
-      let consecutiveSoldout = 0;
       let consecutiveBusy = 0;
       let shotIdx = 0;
-      const SOLDOUT_STOP_THRESHOLD = 3;
       const BUSY_BACKOFF_MS = 200;
       const MAX_INTERVAL_MS = 3000;
 
@@ -719,26 +717,14 @@ export default defineContentScript({
         timers.push(
           setTimeout(async () => {
             const outcome = await fireOne(shot, idx);
-            if (outcome === 'soldout') {
-              consecutiveSoldout++;
-              consecutiveBusy = 0;
-            } else if (outcome === 'busy') {
+            if (outcome === 'busy') {
               consecutiveBusy++;
-              consecutiveSoldout = 0;
               if (consecutiveBusy >= 2) {
                 currentInterval = Math.min(MAX_INTERVAL_MS, currentInterval + BUSY_BACKOFF_MS);
                 postToOverlay({ type: 'FIRE_RESULT', line: `> 555 backoff: interval increased to ${currentInterval}ms` });
               }
             } else {
-              consecutiveSoldout = 0;
               consecutiveBusy = 0;
-            }
-
-            if (consecutiveSoldout >= SOLDOUT_STOP_THRESHOLD) {
-              cancelAll();
-              postToOverlay({ type: 'FIRE_RESULT', line: `> Stopping early: ${SOLDOUT_STOP_THRESHOLD} consecutive soldout` });
-              postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total: idx + 1 } });
-              return;
             }
 
             scheduleNext();

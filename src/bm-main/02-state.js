@@ -91,7 +91,7 @@ function postToOverlay(type, data) {
 
 // ── Product Selection State ──
 var _productMatrix = { monthly: [], quarterly: [], yearly: [] };
-var _billing = 'quarterly';
+var _billing = 'yearly';
 var _priorityList = []; // ordered priority list of { productId }
 var _ticketCount = 0;
 var _tickets = []; // per-ticket lifecycle list from content script

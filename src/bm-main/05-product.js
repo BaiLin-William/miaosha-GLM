@@ -152,6 +152,17 @@ function restoreSelectedProducts() {
       }
     }
   }
+
+  // Default target: yearly Pro plan when nothing is selected.
+  if (_priorityList.length === 0) {
+    var yearly = _productMatrix.yearly || [];
+    for (var j = 0; j < yearly.length; j++) {
+      if (yearly[j].name === 'Pro') {
+        _priorityList.push({ productId: yearly[j].id });
+        break;
+      }
+    }
+  }
 }
 
 function persistSelection() {
