@@ -9,7 +9,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
-    "zip": "node scripts/build-overlay.js && wxt zip && node scripts/zip-prepare.js"
+    "zip": "pnpm build && node scripts/zip-prepare.mjs"
   },
   "license": "ISC",
   "packageManager": "pnpm@10.33.0",
