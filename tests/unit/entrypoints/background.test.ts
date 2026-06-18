@@ -4,7 +4,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing/fake-browser';
-import { rescheduleSaleAlarms } from '../../../entrypoints/background';
+import { rescheduleSaleAlarms, computeBadgeAlarmPlan, getCurrentBadgePhase } from '../../../entrypoints/background';
 import {
   SALE_TIME_DEFAULT,
   createSaleAlarmStatusSnapshot,
@@ -112,5 +112,79 @@ describe('rescheduleSaleAlarms', () => {
     expect(status.items.find((item) => item.name === 'flash-10')?.status).toBe('pending');
     expect(status.items.find((item) => item.name === 'flash-5')?.status).toBe('pending');
     await expect(saleTimeStore.getAlarmStatus()).resolves.toEqual(status);
+  });
+});
+
+describe('computeBadgeAlarmPlan', () => {
+  it('schedules show/hide pairs for every phase and the fire badge when all are future', () => {
+    // 08:30 UTC+8, before T-60 (09:00)
+    const now = atUtc('2026-05-31T00:30:00.000Z');
+    const saleTime = getNextSaleTime(DEFAULT_CONFIG, now);
+    const { show, hide } = computeBadgeAlarmPlan(saleTime, now);
+
+    expect(show.map((a) => a.name).sort()).toEqual([
+      'badge-fire',
+      'badge-show-10',
+      'badge-show-15',
+      'badge-show-30',
+      'badge-show-5',
+      'badge-show-60',
+    ]);
+    expect(hide.map((a) => a.name).sort()).toEqual([
+      'badge-hide-10',
+      'badge-hide-15',
+      'badge-hide-30',
+      'badge-hide-5',
+      'badge-hide-60',
+    ]);
+
+    // Each show/hide pair is exactly one minute apart.
+    for (const min of [60, 30, 15, 10, 5]) {
+      const showAlarm = show.find((a) => a.name === `badge-show-${min}`);
+      const hideAlarm = hide.find((a) => a.name === `badge-hide-${min}`);
+      expect(showAlarm).toBeDefined();
+      expect(hideAlarm).toBeDefined();
+      expect(hideAlarm!.when - showAlarm!.when).toBe(60_000);
+    }
+  });
+
+  it('skips alarms whose show/hide times are already past', () => {
+    // 09:32 UTC+8: T-60 (09:00) and T-30 (09:30) have passed, T-15 is at 09:45.
+    const now = atUtc('2026-05-31T01:32:00.000Z');
+    const saleTime = getNextSaleTime(DEFAULT_CONFIG, now);
+    const { show, hide } = computeBadgeAlarmPlan(saleTime, now);
+
+    expect(show.map((a) => a.name).sort()).toEqual([
+      'badge-fire',
+      'badge-show-10',
+      'badge-show-15',
+      'badge-show-5',
+    ]);
+    expect(hide.map((a) => a.name).sort()).toEqual([
+      'badge-hide-10',
+      'badge-hide-15',
+      'badge-hide-5',
+    ]);
+  });
+});
+
+describe('getCurrentBadgePhase', () => {
+  it('returns the phase only during its one-minute window', () => {
+    const now = atUtc('2026-05-31T00:00:00.000Z');
+    const saleTime = getNextSaleTime(DEFAULT_CONFIG, now);
+
+    expect(getCurrentBadgePhase(saleTime, saleTime - 60 * 60_000)).toBe(60); // exactly T-60
+    expect(getCurrentBadgePhase(saleTime, saleTime - 60 * 60_000 + 30_000)).toBe(60); // T-60 + 30s
+    expect(getCurrentBadgePhase(saleTime, saleTime - 60 * 60_000 + 60_000)).toBeNull(); // T-59, cleared
+
+    expect(getCurrentBadgePhase(saleTime, saleTime - 30 * 60_000)).toBe(30);
+    expect(getCurrentBadgePhase(saleTime, saleTime - 30 * 60_000 + 30_000)).toBe(30);
+    expect(getCurrentBadgePhase(saleTime, saleTime - 30 * 60_000 + 60_000)).toBeNull();
+
+    expect(getCurrentBadgePhase(saleTime, saleTime - 5 * 60_000)).toBe(5);
+    expect(getCurrentBadgePhase(saleTime, saleTime - 5 * 60_000 + 30_000)).toBe(5);
+    expect(getCurrentBadgePhase(saleTime, saleTime - 5 * 60_000 + 60_000)).toBeNull();
+
+    expect(getCurrentBadgePhase(saleTime, saleTime)).toBeNull();
   });
 });

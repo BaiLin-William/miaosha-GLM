@@ -87,6 +87,54 @@ async function fetchAndCacheBatchPreview(): Promise<boolean> {
   }
 }
 
+export interface BadgeAlarmPlan {
+  name: string;
+  when: number;
+  min?: number;
+}
+
+/**
+ * Compute badge alarm times.
+ * Each countdown badge (60/30/15/10/5) is shown for exactly one minute,
+ * then hidden. The fire badge appears at sale time and stays.
+ */
+export function computeBadgeAlarmPlan(saleTime: number, now: number): { show: BadgeAlarmPlan[]; hide: BadgeAlarmPlan[] } {
+  const show: BadgeAlarmPlan[] = [];
+  const hide: BadgeAlarmPlan[] = [];
+
+  for (const min of SALE_ALARM_MINUTES) {
+    const showTime = saleTime - min * 60_000;
+    const hideTime = showTime + 60_000;
+    if (showTime > now) {
+      show.push({ name: `badge-show-${min}`, when: showTime, min });
+    }
+    if (hideTime > now) {
+      hide.push({ name: `badge-hide-${min}`, when: hideTime });
+    }
+  }
+
+  if (saleTime > now) {
+    show.push({ name: 'badge-fire', when: saleTime });
+  }
+
+  return { show, hide };
+}
+
+/**
+ * If `now` falls inside a one-minute badge window, return that phase.
+ * Otherwise the badge should be blank.
+ */
+export function getCurrentBadgePhase(saleTime: number, now: number): number | null {
+  for (const min of SALE_ALARM_MINUTES) {
+    const showTime = saleTime - min * 60_000;
+    const hideTime = showTime + 60_000;
+    if (now >= showTime && now < hideTime) {
+      return min;
+    }
+  }
+  return null;
+}
+
 export async function rescheduleSaleAlarms(reason = 'runtime') {
   const config = await saleTimeStore.get();
   const snapshot = createSaleAlarmStatusSnapshot(config, Date.now(), reason);
@@ -106,74 +154,76 @@ export async function rescheduleSaleAlarms(reason = 'runtime') {
 }
 
 export default defineBackground(() => {
-  let badgeTimeoutIds: ReturnType<typeof setTimeout>[] = [];
-  let badgeFlashIntervalId: ReturnType<typeof setInterval> | null = null;
-
   function clearBadgeAlerts() {
-    badgeTimeoutIds.forEach((timeoutId) => clearTimeout(timeoutId));
-    badgeTimeoutIds = [];
-    if (badgeFlashIntervalId) {
-      clearInterval(badgeFlashIntervalId);
-      badgeFlashIntervalId = null;
-    }
     chrome.action.setBadgeText({ text: '' });
+    chrome.action.setTitle({ title: '' });
   }
 
-  // R1: chrome.alarms — TOP LEVEL registration (not inside async function!)
+  function applyBadgeForMin(min: number) {
+    const style = BADGE_STYLES[min];
+    if (!style) return;
+    chrome.action.setBadgeText({ text: style.text });
+    chrome.action.setBadgeBackgroundColor({ color: style.color });
+    chrome.action.setTitle({ title: style.desc });
+  }
+
+  // R1 / R4: chrome.alarms — TOP LEVEL registration (not inside async function!)
   chrome.alarms.onAlarm.addListener(async (alarm) => {
-    if (!alarm.name.startsWith('flash-')) return;
-    const min = parseInt(alarm.name.split('-')[1], 10);
-    if (isNaN(min)) return;
+    const { name } = alarm;
 
-    // Every alarm point: refresh batch preview data
-    await fetchAndCacheBatchPreview();
+    if (name.startsWith('flash-')) {
+      const min = parseInt(name.split('-')[1], 10);
+      if (isNaN(min)) return;
 
-    // Show notification at every alarm point.
-    await showFlashNotification(min);
+      // Every alarm point: refresh batch preview data
+      await fetchAndCacheBatchPreview();
+
+      // Show notification at every alarm point.
+      await showFlashNotification(min);
+      return;
+    }
+
+    if (name.startsWith('badge-')) {
+      const parts = name.split('-');
+      const kind = parts[1];
+
+      if (kind === 'show' && parts[2]) {
+        const min = parseInt(parts[2], 10);
+        if (!isNaN(min)) applyBadgeForMin(min);
+      } else if (kind === 'hide') {
+        clearBadgeAlerts();
+      } else if (kind === 'fire') {
+        chrome.action.setBadgeText({ text: '🔥' });
+        chrome.action.setBadgeBackgroundColor({ color: '#dc2626' });
+        chrome.action.setTitle({ title: '秒杀进行中！' });
+      }
+      return;
+    }
   });
 
-  // R4: Badge update — each alarm's badge persists until the next alarm replaces it.
+  // R4: Badge update — each countdown badge is shown for exactly one minute.
   async function scheduleBadgeAlerts() {
     clearBadgeAlerts();
     const config = await saleTimeStore.get();
     const saleTime = getNextSaleTime(config);
     const now = Date.now();
-    const remaining = saleTime - now;
 
-    function applyBadgeForMin(min: number) {
-      const style = BADGE_STYLES[min];
-      if (!style) return;
-      chrome.action.setBadgeText({ text: style.text });
-      chrome.action.setBadgeBackgroundColor({ color: style.color });
-      chrome.action.setTitle({ title: style.desc });
+    // Clear stale badge alarms and re-schedule.
+    await Promise.all([
+      ...SALE_ALARM_MINUTES.map((min) => chrome.alarms.clear(`badge-show-${min}`)),
+      ...SALE_ALARM_MINUTES.map((min) => chrome.alarms.clear(`badge-hide-${min}`)),
+      chrome.alarms.clear('badge-fire'),
+    ]);
+
+    const { show, hide } = computeBadgeAlarmPlan(saleTime, now);
+    for (const alarm of [...show, ...hide]) {
+      chrome.alarms.create(alarm.name, { when: alarm.when });
     }
 
-    const phases = [60, 30, 15, 10, 5];
-
-    // If we're already inside the alarm window, show the current phase immediately.
-    if (remaining > 0) {
-      const currentPhase = phases.find((min) => remaining <= min * 60 * 1000);
-      if (currentPhase) applyBadgeForMin(currentPhase);
-    }
-
-    phases.forEach((min) => {
-      const alertTime = saleTime - min * 60 * 1000;
-      if (alertTime <= now) return;
-      const delay = alertTime - now;
-      const timeoutId = setTimeout(() => {
-        applyBadgeForMin(min);
-      }, delay);
-      badgeTimeoutIds.push(timeoutId);
-    });
-
-    // At sale time switch to the fire badge.
-    if (remaining > 0) {
-      const fireTimeoutId = setTimeout(() => {
-        chrome.action.setBadgeText({ text: '🔥' });
-        chrome.action.setBadgeBackgroundColor({ color: '#dc2626' });
-        chrome.action.setTitle({ title: '秒杀进行中！' });
-      }, remaining);
-      badgeTimeoutIds.push(fireTimeoutId);
+    // If we wake up inside a one-minute badge window, show it now.
+    const currentPhase = getCurrentBadgePhase(saleTime, now);
+    if (currentPhase) {
+      applyBadgeForMin(currentPhase);
     }
   }
 
