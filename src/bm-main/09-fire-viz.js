@@ -14,6 +14,9 @@ var _fv_meta     = null;
 var _fv_dotEls   = {};
 var _fv_rowEls   = {};
 var _fv_shotsData = [];
+var _fv_waveCount = 0;
+var _fv_nextShotIdx = 0;
+var _fv_currentWaveStartIdx = 0;
 
 var _FV_OUTCOME = {
   success: { user: '成功', dev: 'ORDER', color: '#059669', icon: '✓' },
@@ -72,15 +75,15 @@ function _fv_buildCSS() {
 function _fv_buildHTML() {
   return _fv_buildCSS() + [
     '<div id="__bm_fv" style="',
-      'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);',
-      'z-index:2147483646;width:480px;',
+      'position:fixed;right:20px;bottom:20px;',
+      'z-index:2147483646;width:420px;max-height:calc(100vh - 40px);',
       'background:rgba(255,255,255,.97);',
       '-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);',
       'border:1px solid #e2e8f0;',
       'border-radius:16px;',
       'box-shadow:0 8px 32px rgba(0,0,0,.15);',
       "font-family:'SF Mono','Fira Code','Consolas',monospace;",
-      'overflow:hidden;user-select:none;color:#1e293b;"',
+      'overflow:hidden;user-select:none;color:#1e293b;display:flex;flex-direction:column;"',
     '>',
 
     // Header
@@ -92,6 +95,8 @@ function _fv_buildHTML() {
     '>',
     '<span style="font-size:15px;display:inline-block;animation:fvFlicker .5s ease-in-out infinite alternate">🔥</span>',
     '<span style="font-size:11px;font-weight:800;color:#6366f1;letter-spacing:.1em;text-transform:uppercase;flex:1">Fire Matrix</span>',
+    '<span style="font-size:8px;font-weight:800;color:#6366f1;background:rgba(99,102,241,.1);padding:1px 6px;border-radius:999px;border:1px solid rgba(99,102,241,.2);margin-right:4px">v1.3.2</span>',
+    '<span id="__bm_fv_wave" style="font-size:9px;font-weight:800;color:#fff;background:#6366f1;padding:2px 7px;border-radius:999px">Wave 1</span>',
     '<span id="__bm_fv_cnt" style="font-size:9px;color:#475569;margin-right:6px">0/0 shots</span>',
     '<button id="__bm_fv_cls" style="',
       'width:18px;height:18px;border-radius:50%;',
@@ -168,48 +173,73 @@ function _fv_buildHTML() {
 }
 
 function _fv_show(data) {
-  var prev = document.getElementById('__bm_fv');
-  if (prev) prev.parentNode && prev.parentNode.removeChild(prev);
-  var prevCss = document.getElementById('__bm_fv_css');
-  if (prevCss) prevCss.parentNode && prevCss.parentNode.removeChild(prevCss);
+  var existing = document.getElementById('__bm_fv');
+  var isAppend = !!existing;
 
-  var tmp = document.createElement('div');
-  tmp.innerHTML = _fv_buildHTML();
-  while (tmp.firstChild) document.body.appendChild(tmp.firstChild);
+  if (!existing) {
+    var tmp = document.createElement('div');
+    tmp.innerHTML = _fv_buildHTML();
+    while (tmp.firstChild) document.body.appendChild(tmp.firstChild);
 
-  _fv_logEl   = document.getElementById('__bm_fv_log');
-  _fv_cursor  = document.getElementById('__bm_fv_cur');
-  _fv_lineNo  = 0;
-  _fv_logLines = [];
-  _fv_shotsData = [];
-  _fv_counts  = { success: 0, busy: 0, soldout: 0, error: 0, neterr: 0 };
-  _fv_startMs = Date.now();
-  _fv_total   = (data && data.totalShots) || 0;
-  _fv_done    = 0;
-  _fv_autoScr = true;
-  _fv_meta    = data || {};
-  _fv_dotEls  = {};
-  _fv_rowEls  = {};
+    _fv_logEl   = document.getElementById('__bm_fv_log');
+    _fv_cursor  = document.getElementById('__bm_fv_cur');
+    _fv_lineNo  = 0;
+    _fv_logLines = [];
+    _fv_shotsData = [];
+    _fv_counts  = { success: 0, busy: 0, soldout: 0, error: 0, neterr: 0 };
+    _fv_startMs = Date.now();
+    _fv_total   = 0;
+    _fv_done    = 0;
+    _fv_autoScr = true;
+    _fv_meta    = data || {};
+    _fv_dotEls  = {};
+    _fv_rowEls  = {};
+    _fv_waveCount = 0;
+    _fv_nextShotIdx = 0;
+    _fv_currentWaveStartIdx = 0;
 
-  _fv_renderDots();
+    _fv_bindEvents();
+  }
+
+  var waveShots = (data && data.totalShots) || 0;
+  _fv_currentWaveStartIdx = _fv_nextShotIdx;
+  _fv_nextShotIdx += waveShots;
+  _fv_total += waveShots;
+  _fv_waveCount++;
+  _fv_meta = data || _fv_meta || {};
+
+  _fv_renderDots(_fv_currentWaveStartIdx, waveShots);
+  _fv_updateWaveBadge();
   _fv_updateMeta();
   _fv_updateProgress();
   _fv_updateStats();
-  _fv_bindEvents();
+
+  _fv_addLine('▶ Wave ' + _fv_waveCount + ' · ' + waveShots + ' shots', '#6366f1');
+  _fv_addLine('  CONFIG ' + JSON.stringify({
+    mode: data.mode,
+    burstIntervalMs: data.burstIntervalMs,
+    totalShots: data.totalShots,
+    startMs: data.startMs
+  }), '#94a3b8');
 }
 
-function _fv_renderDots() {
+function _fv_updateWaveBadge() {
+  var badge = document.getElementById('__bm_fv_wave');
+  if (badge) badge.textContent = 'Wave ' + _fv_waveCount;
+}
+
+function _fv_renderDots(startIdx, count) {
   var wrap = document.getElementById('__bm_fv_dots');
   if (!wrap) return;
-  wrap.innerHTML = '';
-  for (var i = 0; i < _fv_total; i++) {
+  for (var i = 0; i < count; i++) {
+    var globalIdx = startIdx + i;
     var d = document.createElement('div');
-    d.id = '__bm_fv_d_' + i;
+    d.id = '__bm_fv_d_' + globalIdx;
     d.className = 'fv-dot pending';
     d.style.cssText = 'width:10px;height:10px;border-radius:2px;border:1px solid #e2e8f0;background:#e2e8f0;transition:all .25s';
-    d.title = '#' + (i + 1) + ' 待发射';
+    d.title = '#' + (globalIdx + 1) + ' 待发射';
     wrap.appendChild(d);
-    _fv_dotEls[i] = d;
+    _fv_dotEls[globalIdx] = d;
   }
 }
 
@@ -231,9 +261,10 @@ function _fv_updateDot(shotIdx, outcome) {
 function _fv_updateMeta() {
   var el = document.getElementById('__bm_fv_meta');
   if (!el || !_fv_meta) return;
-  var mode = _fv_meta.mode === 'manual' ? 'MANUAL' : 'AUTO';
+  var mode = _fv_meta.mode === 'manual' ? 'MANUAL' : (_fv_meta.mode === 'burst' ? 'BURST' : 'AUTO');
   var interval = (_fv_meta.burstIntervalMs || 2100) + 'ms';
   var parts = [
+    'Wave <b style="color:#1e293b">' + _fv_waveCount + '</b>',
     'Mode: <b style="color:#1e293b">' + mode + '</b>',
     _fv_total + ' shots',
     'interval: <b style="color:#1e293b">' + interval + '</b>'
@@ -464,14 +495,6 @@ window.addEventListener('message', function(e) {
 
   if (d.type === 'FIRE_BATCH_START') {
     _fv_show(d.data);
-    var total = (d.data && d.data.totalShots) || 0;
-    _fv_addLine('▶ Strike ' + total + ' shots · burst', '#6366f1');
-    _fv_addLine('⚙ CONFIG ' + JSON.stringify({
-      mode: d.data.mode,
-      burstIntervalMs: d.data.burstIntervalMs,
-      totalShots: d.data.totalShots,
-      startMs: d.data.startMs
-    }), '#94a3b8');
     return;
   }
 
@@ -482,9 +505,13 @@ window.addEventListener('message', function(e) {
     if (_fv_counts[outcome] !== undefined) _fv_counts[outcome]++;
     else _fv_counts.error++;
     _fv_done++;
-    _fv_shotsData.push(d.data);
-    _fv_updateDot(d.data.shotIdx, outcome);
-    _fv_addTimelineRow(d.data);
+    var shotData = d.data;
+    var localIdx = typeof shotData.shotIdx === 'number' ? shotData.shotIdx : (_fv_done - 1 - _fv_currentWaveStartIdx);
+    var globalIdx = _fv_currentWaveStartIdx + localIdx;
+    shotData.shotIdx = globalIdx;
+    _fv_shotsData.push(shotData);
+    _fv_updateDot(globalIdx, outcome);
+    _fv_addTimelineRow(shotData);
     _fv_updateStats();
     _fv_updateProgress();
     return;

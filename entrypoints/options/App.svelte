@@ -13,7 +13,7 @@
     usage:       { kicker: 'Documentation', title: '使用说明',         subtitle: 'Fire 面板四控件含义、4 种组合与 Preload → Strike → Commit 完整链路。' },
     architecture:{ kicker: 'Documentation', title: '软件架构',         subtitle: 'architecture.md 的网页版摘要：整体架构、入口点、同源代理、auth 与 ticket 系统。' },
     insights:    { kicker: 'Documentation', title: '关键洞察',         subtitle: '通过真实实验推断的智谱后端限流算法与单用户最优发射节奏。' },
-    'release-log': { kicker: 'Release Notes', title: 'v1.2.1 更新日志', subtitle: '自 v1.0.0.alpha 以来的主要改进、新功能与代码清理。' },
+    'release-log': { kicker: 'Release Notes', title: 'v1.3.2 更新日志', subtitle: '新增 BURST 并发轰炸、Batch Mode 双按钮、Fire 面板标签优化与全局版本标识。' },
   };
 </script>
 

@@ -18,6 +18,7 @@ var H1_CSS_ID = '__bm_h1_css';
 // and _rt is a file-local name in 02-state.js)
 var _h1_rt = {
   latencyMs: 0,
+  clockOffsetMs: 0,
   calibratedAt: 0,
   nextSaleTime: 0,
   cfg: null,           // { hour, minute, second, ms, timezone }
@@ -111,6 +112,9 @@ function _h1_buildCSS() {
     '}',
     '#' + H1 + ' .bmh-lat-v i{',
     'font-style:normal;font-size:8px;color:#94a3b8;margin-left:1px',
+    '}',
+    '#' + H1 + ' #bmh-offset .bmh-lat-v{',
+    'color:#f59e0b',
     '}',
     // Auth block: all items share equal width
     '#' + H1 + ' .bmh-auth{',
@@ -222,6 +226,14 @@ function _h1_buildHTML() {
       '<div class="bmh-lat-body">',
         '<div class="bmh-dot" id="bmh-lat-dot"></div>',
         '<span class="bmh-lat-v" id="bmh-lat-v">--<i>ms</i></span>',
+      '</div>',
+    '</div>',
+    // 1.4 Clock Offset
+    '<div class="bmh-lat" id="bmh-offset" data-tip="">',
+      '<div class="bmh-lat-label">Clock Offset</div>',
+      '<div class="bmh-lat-body">',
+        '<div class="bmh-dot" id="bmh-offset-dot"></div>',
+        '<span class="bmh-lat-v" id="bmh-offset-v">--<i>ms</i></span>',
       '</div>',
     '</div>',
     // 1.1 Auth pills
@@ -460,29 +472,65 @@ function _h1_updateAuth() {
   if (loginEl) loginEl.style.display = (!hasCookie || !hasUser) ? 'inline-flex' : 'none';
 }
 
+function _h1_offsetClass(ms) {
+  var abs = Math.abs(ms);
+  if (abs <= 0) return '';
+  if (abs < 50) return 'ok';
+  if (abs < 200) return 'warn';
+  return 'fail';
+}
+
 function _h1_updateLatency() {
   var dot = document.getElementById('bmh-lat-dot');
   var latVal = document.getElementById('bmh-lat-v');
   var latEl = document.getElementById('bmh-lat');
+  var offsetDot = document.getElementById('bmh-offset-dot');
+  var offsetVal = document.getElementById('bmh-offset-v');
+  var offsetEl = document.getElementById('bmh-offset');
   if (!dot || !latVal || !latEl) return;
-  if (_h1_rt.calibratedAt <= 0) {
+
+  var notCalibrated = _h1_rt.calibratedAt <= 0;
+  var ageSec = notCalibrated ? 0 : Math.round((Date.now() - _h1_rt.calibratedAt) / 1000);
+  var offsetSign = _h1_rt.clockOffsetMs >= 0 ? '+' : '';
+  var offsetText = notCalibrated ? '--' : offsetSign + _h1_rt.clockOffsetMs;
+
+  if (notCalibrated) {
     dot.className = 'bmh-dot';
     latVal.innerHTML = '--<i>ms</i>';
-    latEl.setAttribute('data-tip', 'Latency not measured yet\nMeasured as RTT of a POST /api/biz/pay/preview probe call (fake captcha).');
-    return;
+    latEl.setAttribute('data-tip', 'Latency not measured yet\nMeasured as median RTT of 8 POST /api/biz/pay/batch-preview probe calls (fastest 60%).');
+  } else {
+    var cls = _h1_latencyClass(_h1_rt.latencyMs);
+    dot.className = 'bmh-dot calibrated ' + cls;
+    latVal.innerHTML = _h1_rt.latencyMs + '<i>ms</i>';
+    latEl.setAttribute('data-tip',
+      'Network latency\n' +
+      'Latency: ' + _h1_rt.latencyMs + ' ms\n' +
+      'Source: ' + (_h1_rt.reason || 'batch-preview') + '\n' +
+      'Measured: ' + ageSec + ' s ago\n\n' +
+      'Method: 8 POST /api/biz/pay/batch-preview probes, 1.5 s apart. Keep fastest 60% and take median RTT.\n' +
+      'Auto-fire fires at target time − latency − 10 ms, aligned to the server clock.'
+    );
   }
-  var cls = _h1_latencyClass(_h1_rt.latencyMs);
-  dot.className = 'bmh-dot calibrated ' + cls;
-  latVal.innerHTML = _h1_rt.latencyMs + '<i>ms</i>';
-  var ageSec = Math.round((Date.now() - _h1_rt.calibratedAt) / 1000);
-  latEl.setAttribute('data-tip',
-    'Network latency\n' +
-    'Value: ' + _h1_rt.latencyMs + ' ms\n' +
-    'Source: ' + (_h1_rt.reason || 'pay-preview') + '\n' +
-    'Measured: ' + ageSec + ' s ago\n\n' +
-    'Method: RTT of a POST /api/biz/pay/preview probe call using a fake captcha ticket.\n' +
-    'Auto-fire fires at target time minus this latency.'
-  );
+
+  if (offsetDot && offsetVal && offsetEl) {
+    if (notCalibrated) {
+      offsetDot.className = 'bmh-dot';
+      offsetVal.innerHTML = '--<i>ms</i>';
+      offsetEl.setAttribute('data-tip', 'Clock offset not measured yet\nDifference between the server Date header and local clock, measured during the 8 batch-preview probes.');
+    } else {
+      var offCls = _h1_offsetClass(_h1_rt.clockOffsetMs);
+      offsetDot.className = 'bmh-dot calibrated ' + offCls;
+      offsetVal.innerHTML = offsetText + '<i>ms</i>';
+      offsetEl.setAttribute('data-tip',
+        'Clock offset (server − local)\n' +
+        'Offset: ' + offsetText + ' ms\n' +
+        'Source: ' + (_h1_rt.reason || 'batch-preview') + '\n' +
+        'Measured: ' + ageSec + ' s ago\n\n' +
+        'Positive = server clock is ahead of this computer; negative = server clock is behind.\n' +
+        'Auto-fire uses this offset to translate the server-targeted fire time to local time.'
+      );
+    }
+  }
 }
 
 function _h1_updateTimeTick() {
@@ -551,8 +599,10 @@ function _h1_handleMessage(ev) {
   var d = ev.data;
   if (d.type === 'RUNTIME_CALIBRATION' && d.data) {
     var lat = Number(d.data.latencyMs);
+    var offset = Number(d.data.clockOffsetMs);
     if (isFinite(lat)) {
       _h1_rt.latencyMs = Math.max(0, Math.round(lat));
+      _h1_rt.clockOffsetMs = isFinite(offset) ? Math.round(offset) : 0;
       _h1_rt.calibratedAt = typeof d.data.calibratedAt === 'number' ? d.data.calibratedAt : Date.now();
       _h1_rt.reason = d.data.reason || d.data.source || 'batch-preview';
       _h1_updateLatency();

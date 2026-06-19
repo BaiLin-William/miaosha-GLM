@@ -61,6 +61,7 @@ function makeSandbox(): BmMainScope {
     setInterval: () => 0,
     clearInterval: () => {},
     AudioContext: class {},
+    fetch: () => Promise.resolve({ json: () => Promise.resolve({ code: 200, data: { productList: [] } }) }),
     console,
   };
 

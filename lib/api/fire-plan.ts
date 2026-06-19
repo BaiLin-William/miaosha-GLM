@@ -1,79 +1,105 @@
-interface StrikeTicket {
+export interface FirePlanTicket {
   ticket: string;
   randstr: string;
   createdAt: number;
 }
 
-export interface StrikeTarget {
-  productId: string;
-  priority: number; // 1, 2, 3
-}
-
-export interface StrikeShot {
+export interface AutoFirePlanShot {
+  wave: 'initial' | 'follow-up';
   productId: string;
   ticket: string;
   randstr: string;
   createdAt: number;
-  priority: number;
-  shotIndex: number;
+  expiresAt: number;
+  scheduledAt: number;
 }
 
-interface StrikePlan {
-  shots: StrikeShot[];
+export interface AutoFirePlan {
+  initialShots: AutoFirePlanShot[];
+  followUpShots: AutoFirePlanShot[];
+  reservedTickets: FirePlanTicket[];
 }
 
-interface BuildStrikeQueueInput {
-  tickets: StrikeTicket[];
-  targets: StrikeTarget[]; // ordered by priority ascending (P1 first), max 3
+export interface BuildAutoFirePlanInput {
+  tickets: FirePlanTicket[];
+  selectedIds: string[];
+  startMs: number;
+  ticketTtlMs?: number;
+  safeWindowMs?: number;
+  latestFireBufferMs?: number;
+  random?: () => number;
 }
 
-/**
- * Pick the next target in a weighted round-robin that front-loads priority 1.
- * Pattern repeats every 5 slots:
- *   1 target: [P1, P1, P1, P1, P1]
- *   2 targets: [P1, P1, P2, P1, P2]
- *   3 targets: [P1, P1, P2, P1, P3]
- */
-function pickTargetByWeightedRoundRobin(index: number, targets: StrikeTarget[]): StrikeTarget {
-  const count = targets.length;
-  if (count === 1) return targets[0];
+const DEFAULT_TICKET_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_SAFE_WINDOW_MS = 45 * 1000;
+const DEFAULT_LATEST_FIRE_BUFFER_MS = 1000;
 
-  const slot = index % 5;
-  if (count === 2) {
-    // [P1, P1, P2, P1, P2]
-    const map = [0, 0, 1, 0, 1];
-    return targets[map[slot]];
+function clampRandom(value: number): number {
+  if (!Number.isFinite(value)) return 0.5;
+  if (value <= 0) return 0;
+  if (value >= 1) return 0.999999;
+  return value;
+}
+
+function sortByExpiryUrgency(tickets: FirePlanTicket[], ticketTtlMs: number): FirePlanTicket[] {
+  return [...tickets].sort((left, right) => {
+    const leftExpiry = left.createdAt + ticketTtlMs;
+    const rightExpiry = right.createdAt + ticketTtlMs;
+    if (leftExpiry !== rightExpiry) return leftExpiry - rightExpiry;
+    if (left.createdAt !== right.createdAt) return left.createdAt - right.createdAt;
+    return left.ticket.localeCompare(right.ticket);
+  });
+}
+
+export function buildAutoFirePlan(input: BuildAutoFirePlanInput): AutoFirePlan {
+  const ticketTtlMs = input.ticketTtlMs ?? DEFAULT_TICKET_TTL_MS;
+  const safeWindowMs = input.safeWindowMs ?? DEFAULT_SAFE_WINDOW_MS;
+  const latestFireBufferMs = input.latestFireBufferMs ?? DEFAULT_LATEST_FIRE_BUFFER_MS;
+  const random = input.random ?? Math.random;
+  const orderedTickets = sortByExpiryUrgency(input.tickets, ticketTtlMs);
+
+  if (orderedTickets.length === 0 || input.selectedIds.length === 0) {
+    return { initialShots: [], followUpShots: [], reservedTickets: [] };
   }
 
-  // 3 targets: [P1, P1, P2, P1, P3]
-  const map = [0, 0, 1, 0, 2];
-  return targets[map[slot]];
-}
+  const initialCount = Math.min(orderedTickets.length, input.selectedIds.length);
+  const initialTickets = orderedTickets.slice(0, initialCount);
+  const followUpTickets = orderedTickets.slice(initialCount);
 
-export function buildStrikeQueue(input: BuildStrikeQueueInput): StrikePlan {
-  // Sort tickets newest-first so the freshest ticket (furthest from expiry)
-  // gets shot index 0. The first shot has no sliding-window baggage and the
-  // highest chance of reaching business logic.
-  const tickets = (input.tickets || []).slice().sort((a, b) => b.createdAt - a.createdAt);
-  const targets = (input.targets || []).filter((t) => t && t.productId).slice(0, 3);
+  const initialShots = initialTickets.map((ticket, index) => ({
+    wave: 'initial' as const,
+    productId: input.selectedIds[index],
+    ticket: ticket.ticket,
+    randstr: ticket.randstr,
+    createdAt: ticket.createdAt,
+    expiresAt: ticket.createdAt + ticketTtlMs,
+    scheduledAt: input.startMs,
+  }));
 
-  if (tickets.length === 0 || targets.length === 0) {
-    return { shots: [] };
-  }
+  let previousScheduledAt = input.startMs;
+  const followUpShots = followUpTickets.map((ticket, index) => {
+    const expiresAt = ticket.createdAt + ticketTtlMs;
+    const baseWindowStart = Math.max(input.startMs + 1, expiresAt - safeWindowMs);
+    const windowStart = Math.max(baseWindowStart, previousScheduledAt + 1);
+    const windowEnd = Math.max(windowStart, expiresAt - latestFireBufferMs);
+    const ratio = clampRandom(random());
+    const scheduledAt = Math.round(windowStart + (windowEnd - windowStart) * ratio);
+    previousScheduledAt = scheduledAt;
 
-  const shots: StrikeShot[] = [];
-  for (let i = 0; i < tickets.length; i++) {
-    const ticket = tickets[i];
-    const target = pickTargetByWeightedRoundRobin(i, targets);
-    shots.push({
-      productId: target.productId,
+    return {
+      wave: 'follow-up' as const,
+      productId: input.selectedIds[index % input.selectedIds.length],
       ticket: ticket.ticket,
       randstr: ticket.randstr,
       createdAt: ticket.createdAt,
-      priority: target.priority,
-      shotIndex: i,
-    });
-  }
+      expiresAt,
+      scheduledAt,
+    };
+  });
 
-  return { shots };
+  return {
+    initialShots,
+    followUpShots,
+    reservedTickets: orderedTickets,
+  };
 }

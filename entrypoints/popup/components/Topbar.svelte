@@ -1,5 +1,6 @@
 <script lang="ts">
   import { devEnvironment, type DevMode } from '../../../lib/settings/dev';
+  import { version } from '../../../package.json';
 
   let { mode, onmodechange }: {
     mode: DevMode;
@@ -11,6 +12,7 @@
   <div class="brand">
     <div class="brand-icon">Z</div>
     <div class="brand-text">智谱秒杀助手</div>
+    <span class="ver">v{version}</span>
   </div>
   <div class="pill-toggle">
     <button
@@ -60,6 +62,17 @@
     font-size: 13px;
     font-weight: 800;
     color: #1e293b;
+  }
+
+  .ver {
+    font-size: 9px;
+    font-weight: 800;
+    color: #6366f1;
+    background: rgba(99, 102, 241, 0.1);
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    margin-left: 4px;
   }
 
   .pill-toggle {

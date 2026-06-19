@@ -17,6 +17,26 @@
   const LOGS: LogItem[] = [
     {
       category: 'feature',
+      title: 'BURST 并发轰炸模式',
+      body: '新增固定 200ms 间隔的 BURST 并发发射按钮。与默认 Strike 串行模式并存：Strike 按 Strike Interval 顺序发射并自动 555 退避；BURST 忽略 555 退避、快速齐射，适合秒杀窗口内火力压制。',
+    },
+    {
+      category: 'improvement',
+      title: 'Batch Mode Active 横幅双按钮 + Wave 标识',
+      body: 'Batch Mode 红色横幅新增 Fire 串行 / BURST 并发 两个发射按钮，并加入紫色 Wave N 计数徽章，方便在验证码收集过程中直接发起对应模式的发射。',
+    },
+    {
+      category: 'improvement',
+      title: 'Fire 面板标签与 tooltips 优化',
+      body: '将 Burst Interval 重命名为 Strike Interval，明确其仅作用于串行模式；FIRE / BURST 按钮名称与 tooltip 分别标注“串行”与“并发”，降低用户选择负担。',
+    },
+    {
+      category: 'improvement',
+      title: '全局版本标识',
+      body: '在 Batch Mode 横幅、Popup 顶部、页面浮层 Fire 面板、Fire Matrix 面板四个位置统一展示当前版本号，方便用户与截图反馈时确认版本。',
+    },
+    {
+      category: 'feature',
       title: '全新 Fire 策略：错峰首枪 + 稳定连发 + 动态换弹',
       body: '基于实测结论重构发射调度器。新增首枪时间偏移、错峰抖动窗、商品优先级 ticket 配比、错误码驱动退避（500/555 分别处理）、动态目标切换与换弹重分配，提升在智谱 2 秒滑动窗口与腾讯 1000 QPS 核销上限下的命中概率。',
     },

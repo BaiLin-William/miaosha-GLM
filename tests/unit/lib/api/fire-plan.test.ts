@@ -1,111 +1,73 @@
-/**
- * Unit tests: lib/api/fire-plan.ts
- */
-
 import { describe, expect, it } from 'vitest';
-import { buildStrikeQueue } from '../../../../lib/api/fire-plan';
 
-function tickets(count: number) {
-  return Array.from({ length: count }, (_, i) => ({
-    ticket: `t${i + 1}`,
-    randstr: `r${i + 1}`,
-    createdAt: 100 + i,
-  }));
-}
+import { buildAutoFirePlan } from '../../../../lib/api/fire-plan';
 
-describe('buildStrikeQueue', () => {
-  it('returns empty plan when no tickets or no targets', () => {
-    expect(buildStrikeQueue({ tickets: [], targets: [{ productId: 'p1', priority: 1 }] }).shots).toHaveLength(0);
-    expect(buildStrikeQueue({ tickets: tickets(2), targets: [] }).shots).toHaveLength(0);
+describe('buildAutoFirePlan', () => {
+  it('uses the most urgent tickets in the initial concurrent wave', () => {
+    const startMs = 1_000_000;
+    const plan = buildAutoFirePlan({
+      tickets: [
+        { ticket: 'late', randstr: 'r3', createdAt: 900_000 },
+        { ticket: 'urgent', randstr: 'r1', createdAt: 710_000 },
+        { ticket: 'middle', randstr: 'r2', createdAt: 800_000 },
+      ],
+      selectedIds: ['p1', 'p2'],
+      startMs,
+    });
+
+    expect(plan.initialShots).toHaveLength(2);
+    expect(plan.initialShots.map((shot) => shot.ticket)).toEqual(['urgent', 'middle']);
+    expect(plan.initialShots.every((shot) => shot.scheduledAt === startMs)).toBe(true);
+    expect(plan.followUpShots).toHaveLength(1);
+    expect(plan.followUpShots[0].ticket).toBe('late');
   });
 
-  it('caps targets to 3', () => {
-    const targets = [
-      { productId: 'p1', priority: 1 },
-      { productId: 'p2', priority: 2 },
-      { productId: 'p3', priority: 3 },
-      { productId: 'p4', priority: 4 },
+  it('schedules follow-up shots inside the last 45 seconds before expiry', () => {
+    const startMs = 1_000_000;
+    const ttlMs = 300_000;
+    const safeWindowMs = 45_000;
+    const bufferMs = 1_000;
+    const tickets = [
+      { ticket: 't1', randstr: 'r1', createdAt: 700_000 },
+      { ticket: 't2', randstr: 'r2', createdAt: 760_000 },
+      { ticket: 't3', randstr: 'r3', createdAt: 820_000 },
+      { ticket: 't4', randstr: 'r4', createdAt: 880_000 },
     ];
-    const plan = buildStrikeQueue({ tickets: tickets(3), targets });
-    expect(plan.shots.every((s) => ['p1', 'p2', 'p3'].includes(s.productId))).toBe(true);
-  });
 
-  it('assigns every ticket to exactly one shot', () => {
-    const plan = buildStrikeQueue({
-      tickets: tickets(5),
-      targets: [{ productId: 'p1', priority: 1 }],
+    const randomValues = [0.2, 0.8, 0.4, 0.6];
+    let index = 0;
+    const plan = buildAutoFirePlan({
+      tickets,
+      selectedIds: ['p1', 'p2'],
+      startMs,
+      ticketTtlMs: ttlMs,
+      safeWindowMs,
+      latestFireBufferMs: bufferMs,
+      random: () => randomValues[index++] ?? 0.5,
     });
-    expect(plan.shots).toHaveLength(5);
-    expect(plan.shots.every((s) => s.productId === 'p1' && s.priority === 1)).toBe(true);
+
+    expect(plan.initialShots).toHaveLength(2);
+    expect(plan.followUpShots).toHaveLength(2);
+
+    for (const shot of plan.followUpShots) {
+      expect(shot.scheduledAt).toBeGreaterThanOrEqual(Math.max(startMs + 1, shot.expiresAt - safeWindowMs));
+      expect(shot.scheduledAt).toBeLessThanOrEqual(shot.expiresAt - bufferMs);
+    }
+
+    expect(plan.followUpShots[0].scheduledAt).toBeLessThan(plan.followUpShots[1].scheduledAt);
   });
 
-  it('front-loads P1 with 2 targets', () => {
-    const plan = buildStrikeQueue({
-      tickets: tickets(6),
-      targets: [
-        { productId: 'p1', priority: 1 },
-        { productId: 'p2', priority: 2 },
-      ],
-    });
-    const order = plan.shots.map((s) => s.productId);
-    // [P1, P1, P2, P1, P2] repeated
-    expect(order).toEqual(['p1', 'p1', 'p2', 'p1', 'p2', 'p1']);
-  });
-
-  it('front-loads P1 with 3 targets', () => {
-    const plan = buildStrikeQueue({
-      tickets: tickets(10),
-      targets: [
-        { productId: 'p1', priority: 1 },
-        { productId: 'p2', priority: 2 },
-        { productId: 'p3', priority: 3 },
-      ],
-    });
-    const order = plan.shots.map((s) => s.productId);
-    // [P1, P1, P2, P1, P3] x2
-    expect(order).toEqual([
-      'p1', 'p1', 'p2', 'p1', 'p3',
-      'p1', 'p1', 'p2', 'p1', 'p3',
-    ]);
-  });
-
-  it('puts the newest ticket at shot index 0', () => {
-    const plan = buildStrikeQueue({
+  it('does not create follow-up shots when tickets are fewer than selected products', () => {
+    const plan = buildAutoFirePlan({
       tickets: [
-        { ticket: 'tkA', randstr: 'rsA', createdAt: 100 },
-        { ticket: 'tkB', randstr: 'rsB', createdAt: 300 },
-        { ticket: 'tkC', randstr: 'rsC', createdAt: 200 },
+        { ticket: 't1', randstr: 'r1', createdAt: 100 },
+        { ticket: 't2', randstr: 'r2', createdAt: 200 },
       ],
-      targets: [{ productId: 'p1', priority: 1 }],
+      selectedIds: ['p1', 'p2', 'p3'],
+      startMs: 10_000,
     });
-    expect(plan.shots[0].ticket).toBe('tkB');
-    expect(plan.shots[1].ticket).toBe('tkC');
-    expect(plan.shots[2].ticket).toBe('tkA');
-  });
 
-  it('includes ticket and randstr in each shot', () => {
-    const plan = buildStrikeQueue({
-      tickets: [
-        { ticket: 'tkA', randstr: 'rsA', createdAt: 100 },
-        { ticket: 'tkB', randstr: 'rsB', createdAt: 200 },
-      ],
-      targets: [{ productId: 'p1', priority: 1 }],
-    });
-    expect(plan.shots[0]).toEqual({
-      productId: 'p1',
-      ticket: 'tkB',
-      randstr: 'rsB',
-      createdAt: 200,
-      priority: 1,
-      shotIndex: 0,
-    });
-    expect(plan.shots[1]).toEqual({
-      productId: 'p1',
-      ticket: 'tkA',
-      randstr: 'rsA',
-      createdAt: 100,
-      priority: 1,
-      shotIndex: 1,
-    });
+    expect(plan.initialShots).toHaveLength(2);
+    expect(plan.followUpShots).toHaveLength(0);
   });
 });

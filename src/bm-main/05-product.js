@@ -74,6 +74,7 @@ function syncSelectionStatus() {
   var tag = document.getElementById('_prodTag');
   var sel = document.getElementById('_prodSel');
   var fb = document.getElementById('_fb');
+  var fbb = document.getElementById('_fbb');
   var ammo = document.getElementById('_ammo');
   var cp = document.getElementById('_cpd');
   var cpb = document.getElementById('_cpb');
@@ -102,7 +103,11 @@ function syncSelectionStatus() {
 
   if (fb) {
     fb.disabled = summary.launchable === 0;
-    fb.innerHTML = '&#9889; FIRE (' + summary.launchable + ')';
+    fb.innerHTML = '&#9889; FIRE 串行 (' + summary.launchable + ')';
+  }
+  if (fbb) {
+    fbb.disabled = summary.launchable === 0;
+    fbb.innerHTML = '&#9889; BURST 并发 (' + summary.launchable + ') · 200ms';
   }
   if (ammo) {
     if (summary.selected === 0) {
@@ -199,6 +204,10 @@ function toggleProductSelection(productId) {
 function updateProductMatrix(productList) {
   if (productList && productList.length > 0) { _authFailed = false; }
   _productMatrix = buildProductMatrix(productList || []);
+  if (_productMatrix.monthly.length + _productMatrix.quarterly.length + _productMatrix.yearly.length > 0) {
+    _productLoadStatus.status = 'loaded';
+    _productLoadStatus.error = '';
+  }
   restoreSelectedProducts();
   persistSelection();
   renderProducts();
@@ -258,71 +267,119 @@ function renderProductsLoading() {
   if (tag) { tag.textContent = 'LOADING'; tag.className = 'tg tg-a'; }
 }
 
-function measurePayPreviewLatency(auth) {
-  if (!auth) return;
-  var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-  fetch('/api/biz/pay/preview', {
-    method: 'POST',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json;charset=UTF-8',
-      'authorization': auth.authorization,
-      'bigmodel-organization': auth.bigmodelOrganization,
-      'bigmodel-project': auth.bigmodelProject
-    },
-    body: JSON.stringify({ productId: 'fake-product-id', ticket: 'fake-ticket', randstr: 'fake-randstr' })
-  })
-    .then(function() {})
-    .catch(function() {})
-    .finally(function() {
-      var t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-      var rttMs = Math.round(t1 - t0);
-      applyRuntimeCalibration({ latencyMs: rttMs, calibratedAt: Date.now(), source: 'pay-preview' });
+function renderProductsError(reason) {
+  var list = document.getElementById('_prodList');
+  var tag = document.getElementById('_prodTag');
+  if (!list) return;
+  list.innerHTML =
+    '<div style="font-size:8px;text-align:center;padding:10px 6px;line-height:1.8">' +
+    '<div style="color:#dc2626;font-weight:700;margin-bottom:4px">&#9888; 产品加载失败</div>' +
+    '<div style="color:#64748b;font-size:8px;margin-bottom:6px">' + (reason || 'unknown') + '</div>' +
+    '<button id="_prodRetry" style="display:inline-block;padding:3px 10px;background:#6366f1;color:#fff;border-radius:4px;border:0;text-decoration:none;font-size:8px;font-weight:700;cursor:pointer">重试</button>' +
+    '</div>';
+  var btn = document.getElementById('_prodRetry');
+  if (btn) {
+    btn.addEventListener('click', function(e) {
+      e.preventDefault();
+      loadProducts();
     });
+  }
+  if (tag) { tag.textContent = 'ERROR'; tag.className = 'tg tg-r'; }
 }
 
-function fetchBatchPreview() {
+// ── Product loading orchestrator ──
+// Loads products directly from the page first; if that fails, falls back to the
+// isolated content script. Exposes _productLoadStatus for tests/diagnostics.
+var _productLoadStatus = { status: 'idle', error: '', attempt: 0 };
+
+function loadProducts() {
+  if (_productLoadStatus.status === 'loading') return;
+  _productLoadStatus.status = 'loading';
+  _productLoadStatus.error = '';
+  _productLoadStatus.attempt = 0;
+
   var auth = getLocalAuthHeaders();
-  if (!auth) return;
-  fetch('/api/biz/pay/batch-preview', {
-    method: 'POST',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json;charset=UTF-8',
-      'authorization': auth.authorization,
-      'bigmodel-organization': auth.bigmodelOrganization,
-      'bigmodel-project': auth.bigmodelProject
-    },
-    body: '{"invitationCode":""}'
-  })
-    .then(function(r) {
-      return r.json();
+  if (!auth) {
+    _productLoadStatus.status = 'error';
+    _productLoadStatus.error = 'auth-missing';
+    renderProductsAuthError();
+    return;
+  }
+
+  if (!getVisibleProducts().length) renderProductsLoading();
+
+  var MAX_DIRECT_ATTEMPTS = 2;
+  var CONTENT_SCRIPT_TIMEOUT_MS = 8000;
+
+  function markLoaded(productList) {
+    _productLoadStatus.status = 'loaded';
+    _productLoadStatus.error = '';
+    _authFailed = false;
+    try { sessionStorage.setItem('bm_batch_preview', JSON.stringify({ code: 200, data: { productList: productList } })); } catch(e) {}
+    updateProductMatrix(productList);
+  }
+
+  function fallbackToContentScript(reason) {
+    _productLoadStatus.error = reason;
+    cmdToOverlay('REFRESH_BATCH_PREVIEW');
+    setTimeout(function() {
+      if (_productLoadStatus.status !== 'loaded' && getVisibleProducts().length === 0) {
+        _productLoadStatus.status = 'error';
+        renderProductsError(reason);
+      }
+    }, CONTENT_SCRIPT_TIMEOUT_MS);
+  }
+
+  function tryDirect(attempt) {
+    _productLoadStatus.attempt = attempt;
+    fetch('https://bigmodel.cn/api/biz/pay/batch-preview', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json;charset=UTF-8',
+        'authorization': auth.authorization,
+        'bigmodel-organization': auth.bigmodelOrganization,
+        'bigmodel-project': auth.bigmodelProject
+      },
+      body: '{"invitationCode":""}'
     })
-    .then(function(d) {
-      if (d.code === 200 && d.data && d.data.productList) {
-        _authFailed = false;
-        try { sessionStorage.setItem('bm_batch_preview', JSON.stringify(d)); } catch(e) {}
-        updateProductMatrix(d.data.productList);
-      } else if (d.code === 1001) {
-        if (recoverViaAuthenticatedRefresh()) {
-          return;
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.code === 200 && d.data && Array.isArray(d.data.productList) && d.data.productList.length > 0) {
+          markLoaded(d.data.productList);
+        } else if (d.code === 1001) {
+          _authFailed = true;
+          try { sessionStorage.removeItem('bm_batch_preview'); } catch(e) {}
+          renderProductsAuthError();
+        } else {
+          if (attempt < MAX_DIRECT_ATTEMPTS) {
+            setTimeout(function() { tryDirect(attempt + 1); }, 1000);
+          } else {
+            fallbackToContentScript('server-code-' + (d.code || 'unknown'));
+          }
         }
-        _authFailed = true;
-        try { sessionStorage.removeItem('bm_batch_preview'); } catch(e) {}
-        renderProductsAuthError();
-      }
-    })
-    .catch(function() {})
-    .finally(function() {
-      // Guard against an indefinite spinner if the server never returns usable data.
-      if (!_authFailed && !getVisibleProducts().length) {
-        renderProducts();
-      }
-    });
+      })
+      .catch(function(err) {
+        if (attempt < MAX_DIRECT_ATTEMPTS) {
+          setTimeout(function() { tryDirect(attempt + 1); }, 1000);
+        } else {
+          fallbackToContentScript(err && err.message ? err.message : 'network-error');
+        }
+      });
+  }
+
+  tryDirect(1);
+}
+
+// Kept for backward compatibility; new code should call loadProducts().
+function fetchBatchPreview() {
+  loadProducts();
 }
 
 function renderProductsAuthError() {
   _authFailed = true;
+  _productLoadStatus.status = 'error';
+  _productLoadStatus.error = 'auth-missing';
   var list = document.getElementById('_prodList');
   var tag = document.getElementById('_prodTag');
   if (!list) return;
@@ -454,11 +511,7 @@ function setupProductUI() {
 
   loadBatchPreviewFromCache();
   if (!getVisibleProducts().length) renderProductsLoading();
-  fetchBatchPreview();
+  loadProducts();
   cmdToOverlay('REQUEST_BATCH_PREVIEW');
   renderFireConfig();
-
-  // Latency probe is independent of product rendering; run it last so it
-  // can never block or delay the product list from populating.
-  measurePayPreviewLatency(getLocalAuthHeaders());
 }

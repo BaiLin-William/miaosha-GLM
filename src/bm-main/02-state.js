@@ -35,21 +35,45 @@ window.addEventListener('message', function(ev) {
 
 // ── Runtime state (latency calibration + auto-fire scheduler) ──
 var _rt = {
-  latencyMs: 0,       // RTT measured from a fake-captcha /api/biz/pay/preview probe
+  latencyMs: 0,       // one-way latency estimate from runtime calibration probes
+  clockOffsetMs: 0,   // local clock vs server Date header estimate (ms, can be negative)
   nextSaleTime: 0,    // next sale epoch ms (UTC)
   autoTimer: null,    // setTimeout handle for auto-fire
   countdownTimer: null, // setInterval handle for countdown display
   autoFired: false,   // guard: fire only once per scheduled event
   calibratedAt: 0,    // runtime calibration timestamp (epoch ms)
+  sampleCount: 0,     // number of probes used by latest calibration
 };
+
+function updateRuntimeDisplay() {
+  var latEl = document.getElementById('_lat');
+  if (latEl) {
+    var latValue = _rt.calibratedAt > 0 ? String(_rt.latencyMs) : '--';
+    latEl.innerHTML = latValue + '<span style="font-size:9px;color:#94a3b8">ms</span>';
+  }
+  var clkEl = document.getElementById('_clk');
+  if (clkEl) {
+    if (_rt.calibratedAt <= 0) {
+      clkEl.innerHTML = '--<span style="font-size:9px;color:#94a3b8">ms</span>';
+    } else {
+      var sign = _rt.clockOffsetMs >= 0 ? '+' : '';
+      clkEl.innerHTML = sign + _rt.clockOffsetMs + '<span style="font-size:9px;color:#94a3b8">ms</span>';
+    }
+  }
+}
 
 function applyRuntimeCalibration(data) {
   if (!data) return false;
   var latency = Number(data.latencyMs);
-  if (!isFinite(latency)) return false;
+  var offset = Number(data.clockOffsetMs);
+  if (!isFinite(latency) || !isFinite(offset)) return false;
 
   _rt.latencyMs = Math.max(0, Math.round(latency));
+  _rt.clockOffsetMs = Math.round(offset);
   _rt.calibratedAt = typeof data.calibratedAt === 'number' ? data.calibratedAt : Date.now();
+  _rt.sampleCount = typeof data.sampleCount === 'number' ? Math.max(0, Math.round(data.sampleCount)) : 0;
+
+  updateRuntimeDisplay();
 
   // Keep scheduler aligned to freshest calibration.
   if (_rt.nextSaleTime > 0 && !_rt.autoFired) {
@@ -96,4 +120,4 @@ var _priorityList = []; // ordered priority list of { productId }
 var _ticketCount = 0;
 var _tickets = []; // per-ticket lifecycle list from content script
 var _planOrder = ['Lite', 'Pro', 'Max'];
-var _fireConfig = { mode: 'auto', payType: 'ALI', burstIntervalMs: 2100 };
+var _fireConfig = { payType: 'ALI', burstIntervalMs: 2100 };

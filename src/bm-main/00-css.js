@@ -4,6 +4,7 @@ var CSS =
   '#'+O+'::-webkit-scrollbar{width:3px}#'+O+'::-webkit-scrollbar-thumb{background:rgba(99,102,241,0.2);border-radius:99px}' +
   '#'+O+' .h{padding:10px 14px;background:rgba(99,102,241,0.05);border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:6px;cursor:move;position:sticky;top:0;z-index:1}' +
   '#'+O+' .h h3{font-size:12px;font-weight:800;flex:1;margin:0}' +
+  '#'+O+' .h .ver{font-size:8px;font-weight:800;color:#6366f1;background:rgba(99,102,241,.1);padding:1px 6px;border-radius:999px;border:1px solid rgba(99,102,241,.2);margin-right:4px}' +
   '#'+O+' .mn{width:18px;height:18px;border-radius:50%;border:0;background:#e2e8f0;cursor:pointer;font-size:9px;display:grid;place-items:center;color:#475569}' +
   '#'+O+' .opts{width:18px;height:18px;border-radius:50%;border:0;background:transparent;cursor:pointer;font-size:11px;display:grid;place-items:center;color:#94a3b8;margin-left:auto;margin-right:4px;transition:all .15s}' +
   '#'+O+' .opts:hover{color:#6366f1;background:rgba(99,102,241,0.08)}' +
@@ -48,6 +49,8 @@ var CSS =
   '#'+O+' #_fireCfg{margin:6px 0;display:flex;flex-direction:column;gap:5px}' +
   '#'+O+' .fb{width:100%;padding:8px;border:0;border-radius:10px;background:linear-gradient(135deg,#dc2626,#ef4444);color:#fff;font-family:inherit;font-weight:800;font-size:11px;cursor:pointer;transition:all .15s}' +
   '#'+O+' .fb:hover{transform:translateY(-1px)}#'+O+' .fb:disabled{opacity:.35;cursor:not-allowed;transform:none}' +
+  '#'+O+' .fbb{width:100%;padding:6px;border:0;border-radius:10px;background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;font-family:inherit;font-weight:800;font-size:10px;cursor:pointer;transition:all .15s;margin-top:5px}' +
+  '#'+O+' .fbb:hover{transform:translateY(-1px)}#'+O+' .fbb:disabled{opacity:.35;cursor:not-allowed;transform:none}' +
   // Product selector
   '#'+O+' .pr-bill{display:flex;gap:3px;margin-bottom:6px}' +
   '#'+O+' .pr-bl{flex:1;text-align:center;padding:4px;border:1px solid #e2e8f0;border-radius:5px;font-size:7px;color:#94a3b8;cursor:pointer;transition:all .15s;font-family:inherit;background:0}' +

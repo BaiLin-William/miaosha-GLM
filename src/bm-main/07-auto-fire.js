@@ -4,17 +4,11 @@ function scheduleAutoFire(nextSaleTime) {
   _rt.autoFired = false;
   _rt.nextSaleTime = nextSaleTime;
 
-  // If manual mode, do not schedule an automatic strike.
-  if (_fireConfig && _fireConfig.mode === 'manual') {
-    var manualEl = document.getElementById('_auto');
-    if (manualEl) { manualEl.textContent = 'Manual mode — auto disabled'; manualEl.style.color = '#64748b'; }
-    return;
-  }
-
-  // Auto-fire timing: fire locally at target time minus the measured RTT latency.
-  var latencyMs = Math.max(0, Math.round(_rt.latencyMs || 0));
-  var fireAtLocal = nextSaleTime - latencyMs;
-  var delay = fireAtLocal - Date.now();
+  var EARLY_MS = 10; // fire 10ms before target to compensate for setTimeout jitter
+  // Server-aligned baseline: offset > 0 means server clock is ahead of local clock.
+  var fireAtServer = nextSaleTime - _rt.latencyMs - EARLY_MS;
+  var nowServer = Date.now() + _rt.clockOffsetMs;
+  var delay = fireAtServer - nowServer;
 
   var autoEl = document.getElementById('_auto');
 
@@ -28,8 +22,9 @@ function scheduleAutoFire(nextSaleTime) {
     return;
   }
 
+  // Countdown display (100ms refresh)
   _rt.countdownTimer = setInterval(function() {
-    var remaining = fireAtLocal - Date.now();
+    var remaining = fireAtServer - (Date.now() + _rt.clockOffsetMs);
     var autoEl2 = document.getElementById('_auto');
     if (remaining <= 0) {
       clearInterval(_rt.countdownTimer);
@@ -46,36 +41,14 @@ function scheduleAutoFire(nextSaleTime) {
 
 function dispatchAutoFire() {
   if (_rt.autoFired) return;
-
-  if (_fireConfig && _fireConfig.mode === 'manual') {
-    var mEl = document.getElementById('_auto');
-    if (mEl) { mEl.textContent = 'Manual mode — auto disabled'; mEl.style.color = '#64748b'; }
-    if (_rt.countdownTimer) clearInterval(_rt.countdownTimer);
-    return;
-  }
-
   _rt.autoFired = true;
   if (_rt.countdownTimer) clearInterval(_rt.countdownTimer);
   var ts = new Date().toISOString().replace('T', ' ').substring(0, 23);
   var autoEl = document.getElementById('_auto');
   if (autoEl) autoEl.textContent = 'Fired @ ' + ts.slice(11);
-  var latencyMs = Math.max(0, Math.round(_rt.latencyMs || 0));
-  var startMs = _rt.nextSaleTime - latencyMs;
+  var lg = document.getElementById('_log');
+  if (lg) lg.innerHTML += '> Auto-fire dispatched @ ' + ts + '<br>';
+  // Convert server-aligned fire point back to local epoch for content-script timers.
+  var startMs = _rt.nextSaleTime - _rt.latencyMs - 10 - _rt.clockOffsetMs;
   window.postMessage({ __miaosha_cmd: true, type: 'PREFIRE_FIRE', data: { startMs: startMs, reason: 'auto' } }, '*');
 }
-
-// Abort pending auto-fire if the user switches to manual mode.
-window.addEventListener('message', function(ev) {
-  if (ev.source !== window || !ev.data || !ev.data.__miaosha_overlay) return;
-  if (ev.data.type === 'FIRE_CONFIG' && ev.data.data) {
-    _fireConfig = ev.data.data;
-    if (_fireConfig.mode === 'manual') {
-      if (_rt.autoTimer) clearTimeout(_rt.autoTimer);
-      if (_rt.countdownTimer) clearInterval(_rt.countdownTimer);
-      var autoEl = document.getElementById('_auto');
-      if (autoEl && !_rt.autoFired) { autoEl.textContent = 'Manual mode — auto disabled'; autoEl.style.color = '#64748b'; }
-    } else if (!_rt.autoFired && _rt.nextSaleTime > 0) {
-      scheduleAutoFire(_rt.nextSaleTime);
-    }
-  }
-});

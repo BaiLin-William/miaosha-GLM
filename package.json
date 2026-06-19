@@ -1,11 +1,11 @@
 {
   "name": "miaosha-GLM",
-  "version": "1.2.1",
+  "version": "1.3.2",
   "description": "智谱 Coding Plan 秒杀助手浏览器扩展",
   "scripts": {
     "dev": "wxt",
     "build:overlay": "node scripts/build-overlay.js",
-    "build": "node scripts/build-overlay.js && wxt build",
+    "build": "node scripts/build-overlay.js && wxt build && node scripts/verify-no-minifier-collision.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
@@ -27,6 +27,7 @@
     "@wxt-dev/module-svelte": "^2.0.5",
     "happy-dom": "^20.9.0",
     "svelte": "^5.55.10",
+    "terser": "^5.48.0",
     "typescript": "^5.8.3",
     "vitest": "^4.1.7",
     "wxt": "^0.20.26"
