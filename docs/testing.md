@@ -17,7 +17,8 @@
    - 5.3 bm-main 原生 JS 模块测试（vm 沙箱）  
    - 5.4 Svelte 5 组件测试（@testing-library/svelte）  
    - 5.5 集成测试（chrome.* mock）  
-   - 5.6 E2E 回归门（Playwright，已嵌入 build 流水线）  
+   - 5.6 E2E 回归门（Playwright，已嵌入 build 流水线）
+   - 5.7 手动测试原生支付弹窗  
 6. [运行测试](#6-运行测试)  
 7. [扩展现有测试套件](#7-扩展现有测试套件)  
 8. [禁止事项与反模式](#8-禁止事项与反模式)  
@@ -378,6 +379,35 @@ it('captureFromTab 从 tab 获取 auth 并写入 storage', async () => {
 ### 5.6 E2E 回归门（已移除）
 
 原先嵌入 `npm run build` 的 L5/L6 E2E 回归门（`scripts/regression-target-products.js` 与 `scripts/regression-target-products-e2e.js`）已删除。构建流程现在只保留 `build-overlay.js` 与 `wxt build` 两步，回归验证由 Vitest 单元/组件测试覆盖。
+
+---
+
+### 5.7 手动测试原生支付弹窗
+
+在真实秒杀前，建议先验证插件能否正常拉起 bigmodel.cn 的原生支付弹窗，避免抢购成功后因支付链路问题功亏一篑。
+
+#### 方法一：点击 L1 信息条上的 Test Pay 按钮
+
+1. 打开 https://bigmodel.cn/glm-coding，确保插件已注入。
+2. 页面顶部 L1 信息条右侧会出现一个绿色 🔄 图标按钮（tooltip：「模拟抢购成功，提前验证原生支付弹窗能否正常拉起」）。
+3. 点击该按钮。
+4. 预期：bigmodel.cn 原生支付弹窗出现。
+5. 如果弹窗内出现二次腾讯点选验证码，完成或关闭它；弹窗仍应保持打开。
+6. 点击原生弹窗右上角的 X，弹窗关闭。
+
+#### 方法二：使用 DevTools Console 脚本
+
+```bash
+node scripts/test-native-pay-dialog.mjs
+```
+
+按脚本输出的说明，将代码片段粘贴到 bigmodel.cn/glm-coding 页面的 DevTools Console 中执行，效果与方法一相同。
+
+#### 注意事项
+
+- 测试模式使用模拟的 `TEST-*` bizId，不会真正扣款或锁单。
+- 测试模式下只有点击原生弹窗右上角 X 才能关闭；ESC、点击遮罩、后端自动关闭均会被拦截。
+- 真实 `BURST_FIRE_SUCCESS` 路径不会进入测试模式，正常抢购流程不受影响。
 
 ---
 

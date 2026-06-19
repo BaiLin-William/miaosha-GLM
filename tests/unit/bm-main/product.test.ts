@@ -87,7 +87,16 @@ describe('getSelectionSummary with priority list', () => {
     S._ticketCount = 5;
     const summary = (S.getSelectionSummary as () => Record<string, number>)();
     expect(summary.selected).toBe(2);
-    expect(summary.launchable).toBe(2);
+    expect(summary.launchable).toBe(5);
+    expect(summary.tickets).toBe(5);
+  });
+
+  it('is not launchable when no products are selected', () => {
+    S._priorityList = [];
+    S._ticketCount = 5;
+    const summary = (S.getSelectionSummary as () => Record<string, number>)();
+    expect(summary.selected).toBe(0);
+    expect(summary.launchable).toBe(0);
     expect(summary.tickets).toBe(5);
   });
 });

@@ -16,6 +16,11 @@
 
   const LOGS: LogItem[] = [
     {
+      category: 'improvement',
+      title: 'Fire Matrix 调用链路与错误责任主体',
+      body: 'Fire Matrix 底部新增可折叠的 /pay/preview 五步调用链路图，标出 401/500/555/sold-out/bizId 在链中的位置。将“验证码校验服务异常”等 raw serverMsg 翻译为【智谱 --> 腾讯验证码核销：超过了 QPS 限制】格式，明确责任主体与调用关系；新增“验证码繁忙/失效/风控”独立 outcome 与统计，避免用户误以为是插件 bug。',
+    },
+    {
       category: 'feature',
       title: 'BURST 并发轰炸模式',
       body: '新增固定 200ms 间隔的 BURST 并发发射按钮。与默认 Strike 串行模式并存：Strike 按 Strike Interval 顺序发射并自动 555 退避；BURST 忽略 555 退避、快速齐射，适合秒杀窗口内火力压制。',

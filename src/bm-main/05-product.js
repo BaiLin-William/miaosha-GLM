@@ -65,7 +65,7 @@ function getSelectionSummary() {
     total: getAllProducts().length,
     selected: selected,
     tickets: _ticketCount,
-    launchable: Math.min(selected, _ticketCount),
+    launchable: selected > 0 && _ticketCount > 0 ? _ticketCount : 0,
   };
 }
 
@@ -103,28 +103,28 @@ function syncSelectionStatus() {
 
   if (fb) {
     fb.disabled = summary.launchable === 0;
-    fb.innerHTML = '&#9889; FIRE 串行 (' + summary.launchable + ')';
+    fb.innerHTML = '&#9889; FIRE 串行 (' + summary.tickets + ')';
   }
   if (fbb) {
     fbb.disabled = summary.launchable === 0;
-    fbb.innerHTML = '&#9889; BURST 并发 (' + summary.launchable + ') · 200ms';
+    fbb.innerHTML = '&#9889; BURST 并发 (' + summary.tickets + ') · 200ms';
   }
   if (ammo) {
     if (summary.selected === 0) {
-      ammo.textContent = 'Select products to calculate burst size';
+      ammo.textContent = 'Select products to enable Fire';
       ammo.style.color = '#64748b';
     } else if (summary.tickets === 0) {
       ammo.textContent = summary.selected + ' selected · 0 tickets · add captcha first';
       ammo.style.color = '#d97706';
     } else {
-      ammo.textContent = summary.selected + ' selected · ' + summary.tickets + ' tickets · ' + summary.launchable + ' ready to strike';
+      ammo.textContent = summary.selected + ' selected · ' + summary.tickets + ' tickets · ready to strike';
       ammo.style.color = '#059669';
     }
   }
 
   if (meter) {
     var children = meter.children;
-    var ready = Math.min(summary.launchable, 10);
+    var ready = Math.min(summary.tickets, 10);
     for (var j = 0; j < children.length; j++) {
       children[j].className = 'fp' + (j < ready ? ' on' : '');
     }

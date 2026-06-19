@@ -13,6 +13,17 @@
     { field: 'T-xxx.xs', desc: 'auto 模式下距离自动发射的倒计时。' },
   ];
 
+  const ERROR_ROWS = [
+    { outcome: '成功', code: '200 + bizId', subject: '智谱', target: '插件', cause: '锁单成功，返回 bizId', note: ' Fire Matrix 变绿，自动打开支付页。' },
+    { outcome: '售罄', code: '200 sold-out', subject: '智谱', target: '插件', cause: '该商品今日库存已售罄', note: '继续打其他优先级商品。' },
+    { outcome: '限流', code: '555', subject: '智谱', target: '当前用户', cause: '2 秒滑动窗口限流（阈值=1）', note: '建议提高 Burst Interval ≥2100ms。' },
+    { outcome: '验证码繁忙', code: '500', subject: '智谱', target: '腾讯验证码核销', cause: '超过《每秒并发请求量（QPS）限制》', note: '秒杀瞬间大量请求涌入腾讯云导致，非插件 bug。' },
+    { outcome: '验证码失效', code: '500', subject: '插件/用户', target: '腾讯验证码核销', cause: 'ticket 无效或已过期', note: '请重新录入验证码。' },
+    { outcome: '验证码风控', code: '500', subject: '腾讯验证码风控', target: '当前请求', cause: '环境存在安全风险', note: '尝试刷新页面或更换浏览器环境。' },
+    { outcome: '网络错误', code: '0 / network', subject: '插件/网络', target: '智谱', cause: '请求未到达服务端或连接超时', note: '检查网络或稍后重试。' },
+    { outcome: '错误', code: '其他 500', subject: '智谱/网络', target: '插件', cause: '未知服务端错误', note: '查看 raw serverMsg 并反馈。' },
+  ];
+
   const FLOW = [
     {
       phase: 'Preload',
@@ -132,6 +143,30 @@
           <tbody>
             {#each FIELD_ROWS as row}
               <tr><td class="u-name">{row.field}</td><td class="u-desc">{row.desc}</td></tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Error codes -->
+      <div class="doc-hero doc-hero-secondary">
+        <span class="doc-badge">PART F</span>
+        <h4>Fire Matrix 结果与责任主体</h4>
+        <p>每个结果都标明【责任主体 --> 被调用方：原因】，方便你判断是插件问题、网络问题，还是智谱/腾讯侧服务繁忙。</p>
+      </div>
+      <div class="usage-table-wrap">
+        <table class="usage-table">
+          <thead>
+            <tr><th>结果</th><th>HTTP/code</th><th>责任链路</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            {#each ERROR_ROWS as row}
+              <tr>
+                <td class="u-name">{row.outcome}</td>
+                <td class="u-meaning">{row.code}</td>
+                <td class="u-desc">【{row.subject} --> {row.target}：{row.cause}】</td>
+                <td class="u-desc">{row.note}</td>
+              </tr>
             {/each}
           </tbody>
         </table>

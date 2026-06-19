@@ -61,6 +61,16 @@ function setBatchMode(on) {
 
 function toggleBatchMode() { setBatchMode(!_batchMode); }
 
+// ── Auto-cleanup on successful order: close captcha modal and exit batch mode
+// so the bigmodel.cn native payment UI is not blocked by extension UI. ──
+window.addEventListener('message', function(e) {
+  if (!e.data || e.data.__miaosha_overlay !== true) return;
+  if (e.data.type === 'BURST_FIRE_SUCCESS' && e.data.data && e.data.data.bizId) {
+    destroyActiveCaptcha();
+    if (_batchMode) setBatchMode(false);
+  }
+});
+
 // ── Keyboard shortcut: Escape to stop batch ──
 function setupCaptchaKeyboard() {
   document.addEventListener('keydown', function(e) {

@@ -42,6 +42,88 @@ const PHASE_BEEPS: Record<number, number> = {
    5: 4,
 };
 
+// ── /pay/preview response classification: subject -> target -> cause ──
+interface ErrorResponsibility {
+  subject: string;
+  target: string;
+  cause: string;
+}
+
+interface ClassifiedShotResult {
+  outcome:
+    | 'success'
+    | 'soldout'
+    | 'busy'
+    | 'error'
+    | 'neterr'
+    | 'captchaService'
+    | 'captchaInvalid'
+    | 'captchaRisk';
+  code: number;
+  serverMsg: string;
+  rawServerMsg: string;
+  responsibility: ErrorResponsibility;
+}
+
+function classifyPreviewError(body: { code?: number; msg?: string }): ClassifiedShotResult {
+  const code = body.code ?? 500;
+  const raw = body.msg || '';
+
+  if (code === 500 && raw.includes('验证码校验服务异常')) {
+    return {
+      outcome: 'captchaService',
+      code,
+      serverMsg: '【智谱 --> 腾讯验证码核销：超过了《每秒并发请求量（QPS）限制》】' + raw,
+      rawServerMsg: raw,
+      responsibility: { subject: '智谱', target: '腾讯验证码核销', cause: '超过了《每秒并发请求量（QPS）限制》' },
+    };
+  }
+  if (code === 500 && raw.includes('验证码Ticket不合法')) {
+    return {
+      outcome: 'captchaInvalid',
+      code,
+      serverMsg: '【插件/用户 --> 腾讯验证码核销：ticket 无效或已过期】' + raw,
+      rawServerMsg: raw,
+      responsibility: { subject: '插件/用户', target: '腾讯验证码核销', cause: 'ticket 无效或已过期' },
+    };
+  }
+  if (code === 500 && raw.includes('验证存在安全风险')) {
+    return {
+      outcome: 'captchaRisk',
+      code,
+      serverMsg: '【腾讯验证码风控 --> 当前请求：环境存在安全风险】' + raw,
+      rawServerMsg: raw,
+      responsibility: { subject: '腾讯验证码风控', target: '当前请求', cause: '环境存在安全风险' },
+    };
+  }
+  if (code === 555 || raw.toLowerCase().includes('system busy')) {
+    return {
+      outcome: 'busy',
+      code,
+      serverMsg: '【智谱 --> 当前用户：2 秒滑动窗口限流】' + raw,
+      rawServerMsg: raw,
+      responsibility: { subject: '智谱', target: '当前用户', cause: '2 秒滑动窗口限流' },
+    };
+  }
+  return {
+    outcome: 'error',
+    code,
+    serverMsg: '【智谱/网络 --> 插件：未知服务端错误】' + raw,
+    rawServerMsg: raw,
+    responsibility: { subject: '智谱/网络', target: '插件', cause: '未知服务端错误' },
+  };
+}
+
+function neterrResponsibility(message: string): ClassifiedShotResult {
+  return {
+    outcome: 'neterr',
+    code: 0,
+    serverMsg: '【插件/网络 --> 智谱：请求失败】' + message,
+    rawServerMsg: message,
+    responsibility: { subject: '插件/网络', target: '智谱', cause: '请求失败' },
+  };
+}
+
 // ── In-memory ticket pool, backed by page sessionStorage ──
 let _ticketPool: any[] = [];
 let _ticketStoreReadyPromise: Promise<void> | null = null;
@@ -980,7 +1062,8 @@ export default defineContentScript({
               },
             });
           } else {
-            postToOverlay({ type: 'FIRE_RESULT', line: tag + ': code=' + body.code + ' ' + (body.msg || '') + ' (' + rtt + 'ms)' });
+            const cls = classifyPreviewError(body);
+            postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ' + cls.outcome + ' (' + rtt + 'ms)' });
             postToOverlay({
               type: 'FIRE_SHOT_RESULT',
               data: {
@@ -988,17 +1071,20 @@ export default defineContentScript({
                 productId: shot.productId,
                 priority: 1,
                 wave: shot.wave,
-                outcome: 'error',
-                code: body.code,
+                outcome: cls.outcome,
+                code: cls.code,
                 rtt,
                 sentAt: t1,
                 ticketMask: maskTicket(shot.ticket),
-                serverMsg: body.msg || '',
+                serverMsg: cls.serverMsg,
+                rawServerMsg: cls.rawServerMsg,
+                responsibility: cls.responsibility,
               },
             });
           }
         } catch (e: any) {
-          postToOverlay({ type: 'FIRE_RESULT', line: describeShot(shot, idx, total) + ': net-err: ' + (e?.message || 'unknown') });
+          const cls = neterrResponsibility(e?.message || 'unknown');
+          postToOverlay({ type: 'FIRE_RESULT', line: describeShot(shot, idx, total) + ': net-err: ' + cls.rawServerMsg });
           postToOverlay({
             type: 'FIRE_SHOT_RESULT',
             data: {
@@ -1006,11 +1092,14 @@ export default defineContentScript({
               productId: shot.productId,
               priority: 1,
               wave: shot.wave,
-              outcome: 'neterr',
+              outcome: cls.outcome,
+              code: cls.code,
               rtt: Date.now() - t1,
               sentAt: t1,
               ticketMask: maskTicket(shot.ticket),
-              serverMsg: e?.message || 'unknown',
+              serverMsg: cls.serverMsg,
+              rawServerMsg: cls.rawServerMsg,
+              responsibility: cls.responsibility,
             },
           });
         }
@@ -1242,15 +1331,47 @@ export default defineContentScript({
             postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'busy', code: 555, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), serverMsg: body.msg || 'server busy' } });
             return 'busy';
           } else {
-            postToOverlay({ type: 'FIRE_RESULT', line: tag + ': code=' + body.code + ' ' + (body.msg || '') + ' (' + rtt + 'ms)' });
-            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'error', code: body.code, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), serverMsg: body.msg || '' } });
-            return 'error';
+            const cls = classifyPreviewError(body);
+            postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ' + cls.outcome + ' (' + rtt + 'ms)' });
+            postToOverlay({
+              type: 'FIRE_SHOT_RESULT',
+              data: {
+                shotIdx: idx,
+                productId: shot.productId,
+                priority: shot.priority,
+                outcome: cls.outcome,
+                code: cls.code,
+                rtt,
+                sentAt: t1,
+                ticketMask: maskTicket(shot.ticket),
+                serverMsg: cls.serverMsg,
+                rawServerMsg: cls.rawServerMsg,
+                responsibility: cls.responsibility,
+              },
+            });
+            return cls.outcome;
           }
         } catch (e: any) {
           if (e?.name === 'AbortError' || cancelled) return 'cancelled';
-          postToOverlay({ type: 'FIRE_RESULT', line: tag + ': net-err: ' + (e?.message || 'unknown') });
-          postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'neterr', rtt: Date.now() - t1, sentAt: t1, ticketMask: maskTicket(shot.ticket), serverMsg: e?.message || 'unknown' } });
-          return 'neterr';
+          const cls = neterrResponsibility(e?.message || 'unknown');
+          postToOverlay({ type: 'FIRE_RESULT', line: tag + ': net-err: ' + cls.rawServerMsg });
+          postToOverlay({
+            type: 'FIRE_SHOT_RESULT',
+            data: {
+              shotIdx: idx,
+              productId: shot.productId,
+              priority: shot.priority,
+              outcome: cls.outcome,
+              code: cls.code,
+              rtt: Date.now() - t1,
+              sentAt: t1,
+              ticketMask: maskTicket(shot.ticket),
+              serverMsg: cls.serverMsg,
+              rawServerMsg: cls.rawServerMsg,
+              responsibility: cls.responsibility,
+            },
+          });
+          return cls.outcome;
         }
       };
 

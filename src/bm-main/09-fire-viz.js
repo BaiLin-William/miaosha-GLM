@@ -5,7 +5,7 @@ var _fv_logEl    = null;
 var _fv_cursor   = null;
 var _fv_autoScr  = true;
 var _fv_lineNo   = 0;
-var _fv_counts   = { success: 0, busy: 0, soldout: 0, error: 0, neterr: 0 };
+var _fv_counts   = { success: 0, busy: 0, soldout: 0, error: 0, neterr: 0, captchaService: 0, captchaInvalid: 0, captchaRisk: 0 };
 var _fv_startMs  = 0;
 var _fv_total    = 0;
 var _fv_done     = 0;
@@ -19,11 +19,14 @@ var _fv_nextShotIdx = 0;
 var _fv_currentWaveStartIdx = 0;
 
 var _FV_OUTCOME = {
-  success: { user: '成功', dev: 'ORDER', color: '#059669', icon: '✓' },
-  busy:    { user: '限流', dev: '555 / server busy', color: '#d97706', icon: '⚠' },
-  soldout: { user: '售罄', dev: 'sold-out', color: '#64748b', icon: '⊘' },
-  error:   { user: '错误', dev: 'code=N / serverMsg', color: '#dc2626', icon: '✗' },
-  neterr:  { user: '网络错误', dev: 'net-err', color: '#dc2626', icon: '⚡' }
+  success:        { user: '成功',     dev: 'ORDER',                  color: '#059669', icon: '✓' },
+  busy:           { user: '限流',     dev: '555 / server busy',      color: '#d97706', icon: '⚠' },
+  soldout:        { user: '售罄',     dev: 'sold-out',               color: '#64748b', icon: '⊘' },
+  error:          { user: '错误',     dev: 'code=N / serverMsg',     color: '#dc2626', icon: '✗' },
+  neterr:         { user: '网络错误', dev: 'net-err',                color: '#dc2626', icon: '⚡' },
+  captchaService: { user: '验证码繁忙', dev: 'Captcha QPS limit',    color: '#7c3aed', icon: '☁' },
+  captchaInvalid: { user: '验证码失效', dev: 'Invalid ticket',       color: '#ea580c', icon: '◎' },
+  captchaRisk:    { user: '验证码风控', dev: 'Risk control',         color: '#be123c', icon: '⚡' }
 };
 
 function _fv_escHtml(s) {
@@ -61,12 +64,41 @@ function _fv_buildCSS() {
     '#__bm_fv .fv-row:hover{background:rgba(99,102,241,.05)}',
     '#__bm_fv .fv-dot.pending{background:#e2e8f0;border-color:#e2e8f0}',
     '#__bm_fv .fv-stat:hover{background:rgba(255,255,255,.6)}',
+    '#__bm_fv_chain{border-top:1px solid #f1f5f9}',
+    '#__bm_fv_chain_h{padding:6px 14px;font-size:9px;font-weight:700;color:#6366f1;cursor:pointer;display:flex;align-items:center;gap:6px;background:rgba(99,102,241,.03)}',
+    '#__bm_fv_chain_ht{font-size:9px;font-weight:800;color:#1e293b;margin-left:4px}',
+    '#__bm_fv_chain_b{padding:8px 14px 10px;display:none;max-height:110px;overflow-y:auto}',
+    '#__bm_fv_chain.open #__bm_fv_chain_b{display:block}',
+    '#__bm_fv_chain.open #__bm_fv_chain_h .fv-ch-chev{transform:rotate(90deg)}',
+    '.fv-ch-flow{display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:8px}',
+    '.fv-ch-step{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:54px;max-width:64px}',
+    '.fv-ch-num{width:16px;height:16px;border-radius:50%;display:grid;place-items:center;font-size:8px;font-weight:800;color:#fff;background:#94a3b8}',
+    '.fv-ch-num.ok{background:#10b981}',
+    '.fv-ch-num.err{background:#dc2626}',
+    '.fv-ch-num.busy{background:#d97706}',
+    '.fv-ch-name{font-size:8px;font-weight:700;color:#475569;text-align:center;line-height:1.2}',
+    '.fv-ch-arrow{color:#cbd5e1;font-size:10px}',
+    '.fv-ch-tags{display:flex;gap:2px;flex-wrap:wrap;justify-content:center}',
+    '.fv-ch-tag{font-size:6px;font-weight:800;padding:1px 4px;border-radius:3px}',
+    '.fv-ch-tag.e500{background:#fee2e2;color:#dc2626;border:1px solid #fecaca}',
+    '.fv-ch-tag.e555{background:#fef3c7;color:#d97706;border:1px solid #fde68a}',
+    '.fv-ch-tag.e200{background:#f0fdf4;color:#059669;border:1px solid #a7f3d0}',
+    '.fv-ch-tag.e401{background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0}',
+    '.fv-ch-legend{margin-top:8px;padding-top:6px;border-top:1px dashed #e2e8f0;font-size:8px;color:#64748b;line-height:1.5}',
+    '.fv-warn{background:#fffbeb;border:1px solid #fde68a;color:#92400e}',
     '@media (prefers-color-scheme:dark){',
     '#__bm_fv{background:rgba(15,23,42,.92)!important;border-color:rgba(71,85,105,.72)!important}',
     '#__bm_fv_h{background:rgba(99,102,241,.08)!important;border-bottom-color:rgba(71,85,105,.72)!important}',
     '#__bm_fv_meta,#__bm_fv_st{color:#94a3b8!important}',
     '#__bm_fv_log,#__bm_fv_timeline,#__bm_fv .fv-stat-wrap{background:rgba(2,6,23,.55)!important;border-color:rgba(71,85,105,.55)!important}',
     '#__bm_fv .fv-row{background:rgba(255,255,255,.03)!important}',
+    '#__bm_fv_chain_h{color:#a5b4fc!important;background:rgba(99,102,241,.08)!important}',
+    '#__bm_fv_chain_ht{color:#f8fafc!important}',
+    '#__bm_fv_chain_b{background:rgba(2,6,23,.45)!important}',
+    '.fv-ch-name{color:#cbd5e1!important}',
+    '.fv-ch-arrow{color:#475569!important}',
+    '.fv-ch-legend{color:#94a3b8!important;border-color:rgba(71,85,105,.55)!important}',
+    '.fv-warn{background:rgba(120,53,15,.35)!important;border-color:rgba(252,211,77,.25)!important;color:#fde68a!important}',
     '}',
     '</style>'
   ].join('');
@@ -143,6 +175,12 @@ function _fv_buildHTML() {
     '<div class="fv-stat" id="__bm_fv_sd" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#64748b;transition:background .15s">',
       '<span>⊘</span><span>售罄</span><b style="min-width:14px;text-align:center">0</b>',
     '</div>',
+    '<div class="fv-stat" id="__bm_fv_sc" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#7c3aed;transition:background .15s">',
+      '<span>☁</span><span>验证码</span><b style="min-width:14px;text-align:center">0</b>',
+    '</div>',
+    '<div class="fv-warn" style="display:flex;align-items:center;gap:4px;font-size:9px;padding:3px 8px;border-radius:999px;background:#fffbeb;border:1px solid #fde68a;color:#92400e;white-space:nowrap">',
+      '<span>⚠</span><span>10:00 智谱→→腾讯验证码QPS超限→→ 500</span>',
+    '</div>',
     '<span id="__bm_fv_st" style="font-size:9px;color:#94a3b8;margin-left:auto">0ms</span>',
     '</div>',
 
@@ -168,6 +206,33 @@ function _fv_buildHTML() {
     '</div>',
     '</div>',
 
+    // Call Chain
+    '<div id="__bm_fv_chain">',
+    '<div id="__bm_fv_chain_h">',
+      '<span class="fv-ch-chev" style="font-size:9px;transition:transform .15s">▸</span>',
+      '<span>CALL CHAIN /pay/preview</span>',
+      '<span id="__bm_fv_chain_ht">智谱内部订单生成API内部调用链路</span>',
+      '<span style="flex:1"></span>',
+      '<span style="font-size:8px;color:#94a3b8;font-weight:500">点击展开</span>',
+    '</div>',
+    '<div id="__bm_fv_chain_b">',
+      '<div class="fv-ch-flow">',
+        '<div class="fv-ch-step"><span class="fv-ch-num">1</span><span class="fv-ch-name">智谱用户认证Auth</span><span class="fv-ch-tags"><span class="fv-ch-tag e401">401</span></span></div>',
+        '<span class="fv-ch-arrow">→</span>',
+        '<div class="fv-ch-step"><span class="fv-ch-num err">2</span><span class="fv-ch-name">智谱接口内部调用<br>腾讯云验证码校验接口</span><span class="fv-ch-tags"><span class="fv-ch-tag e500">500</span></span></div>',
+        '<span class="fv-ch-arrow">→</span>',
+        '<div class="fv-ch-step"><span class="fv-ch-num busy">3</span><span class="fv-ch-name">智谱限流</span><span class="fv-ch-tags"><span class="fv-ch-tag e555">555</span></span></div>',
+        '<span class="fv-ch-arrow">→</span>',
+        '<div class="fv-ch-step"><span class="fv-ch-num">4</span><span class="fv-ch-name">库存检查</span><span class="fv-ch-tags"><span class="fv-ch-tag e200">sold-out</span></span></div>',
+        '<span class="fv-ch-arrow">→</span>',
+        '<div class="fv-ch-step"><span class="fv-ch-num ok">5</span><span class="fv-ch-name">锁单成功</span><span class="fv-ch-tags"><span class="fv-ch-tag e200">bizId</span></span></div>',
+      '</div>',
+      '<div class="fv-ch-legend">',
+        '① 认证失败时返回 401；② 智谱内部调用腾讯云 Captcha 票据校验接口，失败返回 500（含 QPS 超限）；③ 智谱 2s 滑动窗口限流返回 555；④ 商品售罄返回 sold-out；⑤ 成功返回 bizId。',
+      '</div>',
+    '</div>',
+    '</div>',
+
     '</div>'
   ].join('');
 }
@@ -186,7 +251,7 @@ function _fv_show(data) {
     _fv_lineNo  = 0;
     _fv_logLines = [];
     _fv_shotsData = [];
-    _fv_counts  = { success: 0, busy: 0, soldout: 0, error: 0, neterr: 0 };
+    _fv_counts  = { success: 0, busy: 0, soldout: 0, error: 0, neterr: 0, captchaService: 0, captchaInvalid: 0, captchaRisk: 0 };
     _fv_startMs = Date.now();
     _fv_total   = 0;
     _fv_done    = 0;
@@ -200,6 +265,9 @@ function _fv_show(data) {
 
     _fv_bindEvents();
   }
+
+  var chainWrap = document.getElementById('__bm_fv_chain');
+  if (chainWrap) chainWrap.classList.remove('open');
 
   var waveShots = (data && data.totalShots) || 0;
   _fv_currentWaveStartIdx = _fv_nextShotIdx;
@@ -282,7 +350,10 @@ function _fv_updateProgress() {
 function _fv_userResultText(outcome, code, serverMsg) {
   var m = _FV_OUTCOME[outcome] || _FV_OUTCOME.error;
   var txt = m.user;
-  if (outcome === 'error' && serverMsg) txt += ': ' + serverMsg;
+  if (serverMsg) {
+    if (String(serverMsg).charAt(0) === '【') txt += ': ' + serverMsg;
+    else if (outcome === 'error' || outcome === 'neterr') txt += ': ' + serverMsg;
+  }
   return txt;
 }
 
@@ -312,7 +383,12 @@ function _fv_addTimelineRow(d) {
 
   var tip = d.productId + ' · priority ' + (d.priority || '?');
   if (typeof d.code === 'number') tip += ' · code ' + d.code;
-  if (d.serverMsg) tip += '\n' + d.serverMsg;
+  if (d.responsibility) {
+    tip += '\n责任: ' + d.responsibility.subject + ' --> ' + d.responsibility.target;
+    tip += '\n原因: ' + d.responsibility.cause;
+  }
+  if (d.rawServerMsg) tip += '\nraw: ' + d.rawServerMsg;
+  else if (d.serverMsg) tip += '\n' + d.serverMsg;
   row.title = tip;
 
   _fv_rowEls[idx] = row;
@@ -335,6 +411,8 @@ function _fv_updateStats() {
   if (se) se.querySelector('b').textContent = String(_fv_counts.error + _fv_counts.neterr);
   var sd = document.getElementById('__bm_fv_sd');
   if (sd) sd.querySelector('b').textContent = String(_fv_counts.soldout);
+  var sc = document.getElementById('__bm_fv_sc');
+  if (sc) sc.querySelector('b').textContent = String(_fv_counts.captchaService + _fv_counts.captchaInvalid + _fv_counts.captchaRisk);
   var st = document.getElementById('__bm_fv_st');
   if (st) st.textContent = (Date.now() - _fv_startMs) + 'ms';
 }
@@ -462,6 +540,14 @@ function _fv_bindEvents() {
   var clr = document.getElementById('__bm_fv_clr');
   if (clr) clr.addEventListener('click', _fv_clearLog);
 
+  var chainHead = document.getElementById('__bm_fv_chain_h');
+  var chainWrap = document.getElementById('__bm_fv_chain');
+  if (chainHead && chainWrap) {
+    chainHead.addEventListener('click', function() {
+      chainWrap.classList.toggle('open');
+    });
+  }
+
   var hd = document.getElementById('__bm_fv_h');
   var ov = document.getElementById('__bm_fv');
   if (hd && ov) {
@@ -523,6 +609,7 @@ window.addEventListener('message', function(e) {
     if (line.indexOf('ORDER') !== -1 || line.indexOf('bizId') !== -1) lc = '#059669';
     else if (line.indexOf('sold-out') !== -1)                          lc = '#64748b';
     else if (line.indexOf('555') !== -1 || line.indexOf('busy') !== -1) lc = '#d97706';
+    else if (line.indexOf('captchaService') !== -1 || line.indexOf('captchaInvalid') !== -1 || line.indexOf('captchaRisk') !== -1) lc = '#7c3aed';
     else if (line.indexOf('err') !== -1 || line.indexOf('block') !== -1 || line.indexOf('failed') !== -1) lc = '#dc2626';
     _fv_addLine('→ ' + line, lc);
     return;

@@ -170,6 +170,9 @@ function _h1_buildCSS() {
     '}',
     '#' + H1 + ' .bmh-opts:hover{background:rgba(99,102,241,.1);border-color:rgba(99,102,241,.4);color:#6366f1}',
     '#' + H1 + ' .bmh-opts:active{transform:translateY(1px)}',
+    // Test Pay button (opens native payment dialog for a pre-flight check)
+    '#' + H1 + ' .bmh-test{color:#059669;border-color:rgba(5,150,105,.35);background:rgba(240,253,244,.5)}',
+    '#' + H1 + ' .bmh-test:hover{background:rgba(5,150,105,.1);border-color:rgba(5,150,105,.5);color:#047857}',
     // Unified rich tooltips
     '#' + H1 + ' [data-tip]{position:relative}',
     '#' + H1 + ' [data-tip]::after{',
@@ -261,6 +264,7 @@ function _h1_buildHTML() {
       '</div>',
       '<a class="bmh-login" id="bmh-login" data-tip="Click to open site login modal" style="display:none">Login</a>',
     '</div>',
+    '<button class="bmh-opts bmh-test" id="bmh-test" title="Test native payment dialog" data-tip="模拟抢购成功，提前验证原生支付弹窗能否正常拉起">&#128260;</button>',
     '<button class="bmh-opts" id="bmh-opts" title="Extension options">&#9881;</button>',
   ].join('');
 }
@@ -643,6 +647,15 @@ function _h1_setupOptionsClick() {
   });
 }
 
+// ── Test Pay button trigger ──
+function _h1_setupTestPayClick() {
+  var testEl = document.getElementById('bmh-test');
+  if (!testEl) return;
+  testEl.addEventListener('click', function () {
+    window.postMessage({ __miaosha_cmd: true, type: 'TEST_NATIVE_PAYMENT', data: { payType: 'ALI' } }, '*');
+  });
+}
+
 // ── Injection ──
 function _h1_injectHeader() {
   if (document.getElementById(H1)) return;
@@ -673,6 +686,9 @@ function _h1_injectHeader() {
 
   // Options page click handler
   _h1_setupOptionsClick();
+
+  // Test Pay click handler
+  _h1_setupTestPayClick();
 
   // Initial paints
   _h1_updateAuth();
