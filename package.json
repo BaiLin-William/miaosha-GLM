@@ -1,6 +1,6 @@
 {
   "name": "miaosha-GLM",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "智谱 Coding Plan 秒杀助手浏览器扩展",
   "scripts": {
     "dev": "wxt",

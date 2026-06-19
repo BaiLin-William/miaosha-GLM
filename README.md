@@ -2,7 +2,7 @@
 
 > **智谱 Coding Plan 秒杀助手** — Chrome MV3 浏览器扩展，辅助抢购 bigmodel.cn 限量套餐。
 
-**当前版本：v1.3.2。** 秒杀网站的防护策略持续升级，本项目的成功率也在动态变化。我们非常欢迎社区贡献代码、反馈问题、分享经验。
+**当前版本：v1.3.3。** 秒杀网站的防护策略持续升级，本项目的成功率也在动态变化。我们非常欢迎社区贡献代码、反馈问题、分享经验。
 
 ---
 
@@ -84,7 +84,7 @@ XHR 拦截到验证码响应               监听 window message
 
 ### 方式一：下载预编译包（推荐）
 
-1. 下载 zip 压缩包：[miaosha-GLM.zip](https://github.com/Rocke1001feller/miaosha-GLM/releases/download/v1.3.2/miaosha-glm-1.3.2-chrome.zip)
+1. 下载 zip 压缩包：[miaosha-GLM.zip](https://github.com/Rocke1001feller/miaosha-GLM/releases/download/v1.3.3/miaosha-glm-1.3.3-chrome.zip)
 2. 解压 zip 文件（见下方[解压说明](#zip-解压说明)）
 3. 打开 Chrome 浏览器，访问 `chrome://extensions`
 4. 开启右上角的「开发者模式」
@@ -120,7 +120,7 @@ pnpm build
 根据你的操作系统，解压下载的 zip 文件：
 
 **macOS**
-- 双击 `miaosha-GLM-chrome-mv3-1.3.2.zip`，系统自动解压
+- 双击 `miaosha-GLM-chrome-mv3-1.3.3.zip`，系统自动解压
 - 或右键选择「用归档实用工具打开」
 
 **Windows**
@@ -129,7 +129,7 @@ pnpm build
 
 **Linux**
 ```bash
-unzip miaosha-GLM-chrome-mv3-1.3.2.zip
+unzip miaosha-GLM-chrome-mv3-1.3.3.zip
 ```
 
 解压后你会看到一个 `智谱秒杀助手` 文件夹，直接选择该文件夹加载到 Chrome 即可。
