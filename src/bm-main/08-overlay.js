@@ -3,7 +3,7 @@ function buildHTML() {
   return '<style>' + CSS + '</style>' +
 
     // Header
-    '<div class="h"><span>&#128736;</span><h3>智谱秒杀助手</h3><span class="ver">v1.3.3</span><button class="opts" id="_opts" title="Open options">&#9881;</button><button class="mn" id="_mn">&#8722;</button></div>' +
+    '<div class="h"><span>&#128736;</span><h3>智谱秒杀助手</h3><span class="ver">v1.4.1</span><button class="opts" id="_opts" title="Open options">&#9881;</button><button class="mn" id="_mn">&#8722;</button></div>' +
     '<div class="b" id="_bd">' +
 
     // Card 1: Preparations
@@ -173,12 +173,6 @@ function injectOverlay() {
       applyRuntimeCalibration(d.data);
     }
 
-    if (d.type === 'BATCH_PREVIEW_DATA' && d.data) {
-      // Trust the content script: it only fetches after validating auth.
-      _authFailed = false;
-      updateProductMatrix(d.data);
-    }
-
     if (d.type === 'SOLDOUT_CLEARED' && d.data && Array.isArray(d.data.clearedIds) && d.data.clearedIds.length > 0) {
       _priorityList = d.data.clearedIds.slice(0, 3).map(function(id) { return { productId: id }; });
       persistSelection();
@@ -273,7 +267,7 @@ function injectOverlay() {
       // Auth just became ready: event-driven product refresh, no independent polling.
       renderProductsLoading();
       loadBatchPreviewFromCache();
-      loadProducts();
+      if (_productLoadStatus.status !== 'loaded') loadProducts();
 
       var totalProducts = 0;
       try {
@@ -291,7 +285,6 @@ function injectOverlay() {
       _ticketCount = 0;
       _tickets = [];
       try { sessionStorage.removeItem('bm_batch_preview'); } catch (e) {}
-      cmdToOverlay('CLEAR_BATCH_PREVIEW_CACHE');
       cmdToOverlay('CLEAR_TICKET_POOL');
       renderProductsAuthError();
       renderFireConfig();

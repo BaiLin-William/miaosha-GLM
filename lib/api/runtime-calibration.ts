@@ -1,3 +1,5 @@
+import { xhrRequest } from '../platform/adapters/bigmodel/request';
+
 const TARGET = 'https://bigmodel.cn/api/biz/pay/batch-preview';
 const PROBE_COUNT = 8;
 const PROBE_INTERVAL_MS = 1500;
@@ -25,26 +27,26 @@ async function probeOnce(auth: {
   const perfSend = performance.now();
   const dateSend = Date.now();
 
-  const res = await fetch(TARGET, {
+  const res = await xhrRequest<unknown>({
     method: 'POST',
-    credentials: 'include',
+    url: TARGET,
+    withCredentials: true,
     headers: {
-      'Content-Type': 'application/json;charset=UTF-8',
-      'authorization': auth.authorization,
-      'bigmodel-organization': auth.bigmodelOrganization,
-      'bigmodel-project': auth.bigmodelProject,
+      Accept: 'application/json, text/plain, */*',
+      'Content-Type': 'application/json;charset=utf-8',
+      Authorization: auth.authorization,
+      'Bigmodel-Organization': auth.bigmodelOrganization,
+      'Bigmodel-Project': auth.bigmodelProject,
     },
-    body: JSON.stringify({}),
-    cache: 'no-store',
+    body: JSON.stringify({ invitationCode: '' }),
   });
 
   // Consume response to ensure full round-trip
-  await res.text();
   const dateRecv = Date.now();
   const perfRecv = performance.now();
 
   const rttMs = perfRecv - perfSend;
-  const serverTimeStr = res.headers.get('Date');
+  const serverTimeStr = res.headers['date'];
   const serverTimeMs = serverTimeStr ? new Date(serverTimeStr).getTime() : 0;
 
   return { rttMs, serverTimeMs, localSendMs: dateSend, localRecvMs: dateRecv };

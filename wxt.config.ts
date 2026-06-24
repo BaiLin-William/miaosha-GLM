@@ -21,13 +21,17 @@ export default defineConfig({
   }),
   manifest: {
     name: '智谱秒杀助手',
-    description: '智谱 Coding Plan 秒杀助手浏览器扩展',
+    description: '多平台 Coding Plan 秒杀助手浏览器扩展（智谱 / 火山引擎）',
     permissions: ['storage', 'tabs', 'scripting', 'alarms', 'notifications'],
-    host_permissions: ['*://*.bigmodel.cn/*'],
+    host_permissions: ['*://*.bigmodel.cn/*', '*://*.volcengine.com/*'],
     web_accessible_resources: [
       {
-        resources: ['bm-main.js'],
+        resources: ['bm-early.js', 'bm-main.js'],
         matches: ['*://*.bigmodel.cn/*'],
+      },
+      {
+        resources: ['volc-agentplan-main.js', 'volc-codingplan-main.js'],
+        matches: ['*://*.volcengine.com/*'],
       },
     ],
   },

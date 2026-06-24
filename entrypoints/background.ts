@@ -9,9 +9,6 @@ import {
   saleTimeStore,
 } from '../lib/settings/sale-time';
 
-const BATCH_PREVIEW_KEY = 'local:batchPreview';
-const AUTH_HEADERS_KEY = 'local:authHeaders';
-
 interface AuthHeaders {
   authorization: string;
   bigmodelOrganization: string;
@@ -25,6 +22,8 @@ const BADGE_STYLES: Record<number, { text: string; color: string; desc: string }
   10: { text: '10', color: '#f97316', desc: '距秒杀 10 分钟' },
    5: { text: '5!', color: '#dc2626', desc: '距秒杀 5 分钟：立即录入验证码！' },
 };
+
+const OK_BADGE_TTL_MS = 30 * 60_000;
 
 async function showFlashNotification(min: number) {
   const message = min >= 60
@@ -55,35 +54,6 @@ async function showFlashNotification(min: number) {
       message,
       priority: 2,
     }).catch(() => undefined);
-  }
-}
-
-async function fetchAndCacheBatchPreview(): Promise<boolean> {
-  try {
-    const auth = await storage.getItem<AuthHeaders>(AUTH_HEADERS_KEY);
-    if (!auth?.authorization || !auth?.bigmodelOrganization || !auth?.bigmodelProject) {
-      return false;
-    }
-
-    const res = await fetch('https://bigmodel.cn/api/biz/pay/batch-preview', {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json;charset=UTF-8',
-        authorization: auth.authorization,
-        'bigmodel-organization': auth.bigmodelOrganization,
-        'bigmodel-project': auth.bigmodelProject,
-      },
-      body: '{"invitationCode":""}',
-    });
-    const data = await res.json();
-    if (data.code === 200 && data.data?.productList) {
-      await storage.setItem(BATCH_PREVIEW_KEY, data);
-      return true;
-    }
-    return false;
-  } catch {
-    return false;
   }
 }
 
@@ -178,8 +148,8 @@ export default defineBackground(() => {
       const min = parseInt(name.split('-')[1], 10);
       if (isNaN(min)) return;
 
-      // Every alarm point: refresh batch preview data
-      await fetchAndCacheBatchPreview();
+      // Product catalog is fetched by the MAIN world script only; the service
+      // worker does not call batch-preview because Alibaba WAF blocks it.
 
       // Show notification at every alarm point.
       await showFlashNotification(min);
@@ -187,6 +157,11 @@ export default defineBackground(() => {
     }
 
     if (name.startsWith('badge-')) {
+      if (name === 'badge-ok-clear') {
+        clearBadgeAlerts();
+        return;
+      }
+
       if (name === 'badge-fire-hide') {
         clearBadgeAlerts();
         return;
@@ -222,6 +197,7 @@ export default defineBackground(() => {
       ...SALE_ALARM_MINUTES.map((min) => chrome.alarms.clear(`badge-hide-${min}`)),
       chrome.alarms.clear('badge-fire'),
       chrome.alarms.clear('badge-fire-hide'),
+      chrome.alarms.clear('badge-ok-clear'),
     ]);
 
     const { show, hide } = computeBadgeAlarmPlan(saleTime, now);
@@ -245,24 +221,71 @@ export default defineBackground(() => {
   chrome.runtime.onInstalled.addListener(() => {
     rescheduleSaleAlarms('installed');
     scheduleBadgeAlerts();
-    fetchAndCacheBatchPreview();
   });
 
   // On Chrome startup: re-schedule (alarms don't persist across restart)
   chrome.runtime.onStartup.addListener(() => {
     rescheduleSaleAlarms('startup');
     scheduleBadgeAlerts();
-    fetchAndCacheBatchPreview();
   });
 
-  // Listen for sale time config updates from Options page
+  // Proxy platform API requests from content/popup contexts through the
+  // service worker. The MAIN world now fetches /api/biz/pay/batch-preview
+  // directly because Alibaba WAF blocks extension-origin requests to that
+  // endpoint. This proxy remains available for other platform endpoints.
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.type === 'BIGMODEL_REQUEST' || msg.type === 'VOLCENGINE_REQUEST') {
+      (async () => {
+        const { url, method, headers, body } = msg.payload;
+        // Enforce the no-batch-preview-from-extension rule here as a safety net.
+        if (url && url.includes('/api/biz/pay/batch-preview')) {
+          sendResponse({ ok: false, error: 'batch-preview must be fetched from the MAIN world' });
+          return;
+        }
+        const res = await fetch(url, {
+          method: method || 'GET',
+          credentials: 'include',
+          headers: headers || {},
+          body: body ?? undefined,
+        });
+        const responseHeaders: Record<string, string> = {};
+        res.headers.forEach((value, key) => {
+          responseHeaders[key.toLowerCase()] = value;
+        });
+        sendResponse({
+          ok: true,
+          status: res.status,
+          statusText: res.statusText,
+          headers: responseHeaders,
+          body: await res.text(),
+        });
+      })().catch((err) => {
+        sendResponse({ ok: false, error: err?.message || String(err) });
+      });
+      return true;
+    }
+
+    if (msg.type === 'VOLC_PURCHASE_SUCCESS') {
+      (async () => {
+        const { orderId, productName, plan } = msg;
+        await chrome.action.setBadgeText({ text: 'OK' });
+        await chrome.action.setBadgeBackgroundColor({ color: '#10b981' });
+        await chrome.action.setTitle({ title: (plan || '火山引擎') + ' 抢购成功 · 订单 ' + orderId + (productName ? ' · ' + productName : '') });
+        // OK badge is a transient success indicator; clear it after the payment window.
+        await chrome.alarms.clear('badge-ok-clear');
+        await chrome.alarms.create('badge-ok-clear', { when: Date.now() + OK_BADGE_TTL_MS });
+        sendResponse({ ok: true });
+      })().catch((err) => {
+        sendResponse({ ok: false, error: err?.message || String(err) });
+      });
+      return true;
+    }
+
     if (msg.type === 'SALE_TIME_UPDATED') {
       saleTimeStore.set(msg.config)
         .then(() => rescheduleSaleAlarms('manual-confirm'))
         .then((alarmStatus) => {
           scheduleBadgeAlerts();
-          fetchAndCacheBatchPreview();
           sendResponse({ ok: true, alarmStatus });
         });
       return true;

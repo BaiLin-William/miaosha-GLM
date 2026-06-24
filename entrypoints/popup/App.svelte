@@ -1,9 +1,10 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { devEnvironment, type DevMode } from '../../lib/settings/dev';
   import Topbar from './components/Topbar.svelte';
   import Footer from './components/Footer.svelte';
   import DevContent from './components/DevContent.svelte';
-  import ProdContent from './components/ProdContent.svelte';
+  import PlatformEntryGrid from './components/PlatformEntryGrid.svelte';
 
   let mode = $state<DevMode>('development');
   let loaded = $state(false);
@@ -12,6 +13,16 @@
     devEnvironment.get().then((value) => {
       mode = value;
       loaded = true;
+    });
+  });
+
+  onMount(() => {
+    // Acknowledge a transient purchase-success badge when the user opens the popup.
+    chrome.action.getBadgeText({}).then((text) => {
+      if (text === 'OK') {
+        chrome.action.setBadgeText({ text: '' });
+        chrome.action.setTitle({ title: '' });
+      }
     });
   });
 
@@ -28,7 +39,7 @@
     {#if mode === 'development'}
       <DevContent />
     {:else}
-      <ProdContent />
+      <PlatformEntryGrid />
     {/if}
   {:else}
     <div class="loading">
@@ -48,20 +59,23 @@
 
   :global(body) {
     font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    color: #1e293b;
-    background: #f4f7fb;
+    color: #0c1224;
+    background: #f5f3ee;
     width: 380px;
     min-height: 520px;
     overflow: hidden;
+    /* 工程蓝图网格底纹 */
     background-image:
-      radial-gradient(at 20% 10%, rgba(99, 102, 241, 0.06), transparent 50%),
-      radial-gradient(at 80% 90%, rgba(16, 185, 129, 0.06), transparent 50%);
+      linear-gradient(rgba(12, 18, 36, 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(12, 18, 36, 0.04) 1px, transparent 1px);
+    background-size: 18px 18px;
   }
 
   .shell {
     display: flex;
     flex-direction: column;
     height: 100vh;
+    background: #ffffff;
   }
 
   .loading {
@@ -71,12 +85,12 @@
   }
 
   .loading-spinner {
-    width: 24px;
-    height: 24px;
-    border: 3px solid #e2e8f0;
-    border-top-color: #6366f1;
+    width: 22px;
+    height: 22px;
+    border: 2px solid #0c1224;
+    border-top-color: transparent;
     border-radius: 50%;
-    animation: spin 0.6s linear infinite;
+    animation: spin 0.7s linear infinite;
   }
 
   @keyframes spin {

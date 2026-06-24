@@ -8,21 +8,20 @@
 
 <div class="footer">
   <div class="footer-actions">
-    <button class="fbtn" title="Settings" onclick={openOptions}>&#9881;</button>
+    <button class="fbtn" title="Settings" onclick={openOptions}>⚙</button>
   </div>
-  <span class="ver">v{version}</span>
+  <span class="meta">v{version} · </span>
 </div>
 
 <style>
   .footer {
-    padding: 8px 16px;
+    flex: 0 0 auto;
+    padding: 8px 14px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    background: rgba(255, 255, 255, 0.7);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border-top: 1px solid #e2e8f0;
+    background: #ffffff;
+    border-top: 1.5px solid #0c1224;
   }
 
   .footer-actions {
@@ -31,26 +30,28 @@
   }
 
   .fbtn {
-    width: 28px;
-    height: 28px;
-    border-radius: 8px;
-    border: 1px solid #e2e8f0;
-    background: #fff;
-    color: #94a3b8;
+    width: 26px;
+    height: 26px;
+    border: 1.5px solid #0c1224;
+    border-radius: 6px;
+    background: #fafaf7;
+    color: #0c1224;
     display: grid;
     place-items: center;
-    font-size: 13px;
+    font-size: 12px;
     cursor: pointer;
     transition: all 0.15s;
   }
 
   .fbtn:hover {
-    border-color: #6366f1;
-    color: #6366f1;
+    background: #0c1224;
+    color: #f5f3ee;
   }
 
-  .ver {
+  .meta {
+    font-family: 'JetBrains Mono', monospace;
     font-size: 9px;
-    color: #94a3b8;
+    color: #6a7496;
+    letter-spacing: 0.05em;
   }
 </style>

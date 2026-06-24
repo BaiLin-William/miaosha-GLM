@@ -252,13 +252,6 @@ function hasLocalAuthSignals() {
   return !!getLocalAuthHeaders();
 }
 
-function recoverViaAuthenticatedRefresh() {
-  if (!hasLocalAuthSignals()) return false;
-  _authFailed = false;
-  cmdToOverlay('REFRESH_BATCH_PREVIEW');
-  return true;
-}
-
 function renderProductsLoading() {
   var list = document.getElementById('_prodList');
   var tag = document.getElementById('_prodTag');
@@ -281,18 +274,40 @@ function renderProductsError(reason) {
   if (btn) {
     btn.addEventListener('click', function(e) {
       e.preventDefault();
-      loadProducts();
+      loadProducts(true);
     });
   }
   if (tag) { tag.textContent = 'ERROR'; tag.className = 'tg tg-r'; }
 }
 
+function handleBatchPreviewError(error) {
+  // Never overwrite a successful load with a transient network/server error
+  // (e.g. WAF/rate-limit code 555). Once products are visible, stay loaded.
+  if (_productLoadStatus.status === 'loaded' || getAllProducts().length > 0) {
+    _productLoadStatus.status = 'loaded';
+    return;
+  }
+  _productLoadStatus.status = 'error';
+  var msg = error || 'network-error';
+  if (msg.indexOf('auth') !== -1 || msg.indexOf('401') !== -1 || msg.indexOf('token') !== -1) {
+    renderProductsAuthError();
+  } else {
+    renderProductsError(msg);
+  }
+}
+
 // ── Product loading orchestrator ──
-// Loads products directly from the page first; if that fails, falls back to the
-// isolated content script. Exposes _productLoadStatus for tests/diagnostics.
+// The MAIN world calls /api/biz/pay/batch-preview directly using the original
+// page fetch saved by bm-early.content.ts before the Sentry SDK instruments it.
+// Content-script/service-worker proxies are intentionally NOT used because
+// Alibaba WAF blocks any request initiated from the extension's isolated world.
+// Exposes _productLoadStatus for tests/diagnostics.
 var _productLoadStatus = { status: 'idle', error: '', attempt: 0 };
 
-function loadProducts() {
+function loadProducts(force) {
+  // Once loaded, ignore automatic refresh triggers (checkRealState/setupProductUI
+  // both fire shortly after injection). Manual retry passes force=true.
+  if (!force && _productLoadStatus.status === 'loaded') return;
   if (_productLoadStatus.status === 'loading') return;
   _productLoadStatus.status = 'loading';
   _productLoadStatus.error = '';
@@ -308,31 +323,22 @@ function loadProducts() {
 
   if (!getVisibleProducts().length) renderProductsLoading();
 
-  var MAX_DIRECT_ATTEMPTS = 2;
-  var CONTENT_SCRIPT_TIMEOUT_MS = 8000;
+  var MAX_ATTEMPTS = 2;
 
   function markLoaded(productList) {
     _productLoadStatus.status = 'loaded';
     _productLoadStatus.error = '';
     _authFailed = false;
-    try { sessionStorage.setItem('bm_batch_preview', JSON.stringify({ code: 200, data: { productList: productList } })); } catch(e) {}
+    try {
+      sessionStorage.setItem('bm_batch_preview', JSON.stringify({ code: 200, data: { productList: productList } }));
+    } catch(e) {}
     updateProductMatrix(productList);
   }
 
-  function fallbackToContentScript(reason) {
-    _productLoadStatus.error = reason;
-    cmdToOverlay('REFRESH_BATCH_PREVIEW');
-    setTimeout(function() {
-      if (_productLoadStatus.status !== 'loaded' && getVisibleProducts().length === 0) {
-        _productLoadStatus.status = 'error';
-        renderProductsError(reason);
-      }
-    }, CONTENT_SCRIPT_TIMEOUT_MS);
-  }
-
-  function tryDirect(attempt) {
+  function tryFetch(attempt) {
     _productLoadStatus.attempt = attempt;
-    fetch('https://bigmodel.cn/api/biz/pay/batch-preview', {
+    var doFetch = window.__bm_originalFetch || window.fetch;
+    doFetch('https://bigmodel.cn/api/biz/pay/batch-preview', {
       method: 'POST',
       credentials: 'include',
       headers: {
@@ -352,23 +358,23 @@ function loadProducts() {
           try { sessionStorage.removeItem('bm_batch_preview'); } catch(e) {}
           renderProductsAuthError();
         } else {
-          if (attempt < MAX_DIRECT_ATTEMPTS) {
-            setTimeout(function() { tryDirect(attempt + 1); }, 1000);
+          if (attempt < MAX_ATTEMPTS) {
+            setTimeout(function() { tryFetch(attempt + 1); }, 1000);
           } else {
-            fallbackToContentScript('server-code-' + (d.code || 'unknown'));
+            handleBatchPreviewError('server-code-' + (d.code || 'unknown'));
           }
         }
       })
       .catch(function(err) {
-        if (attempt < MAX_DIRECT_ATTEMPTS) {
-          setTimeout(function() { tryDirect(attempt + 1); }, 1000);
+        if (attempt < MAX_ATTEMPTS) {
+          setTimeout(function() { tryFetch(attempt + 1); }, 1000);
         } else {
-          fallbackToContentScript(err && err.message ? err.message : 'network-error');
+          handleBatchPreviewError(err && err.message ? err.message : 'network-error');
         }
       });
   }
 
-  tryDirect(1);
+  tryFetch(1);
 }
 
 // Kept for backward compatibility; new code should call loadProducts().
@@ -511,7 +517,6 @@ function setupProductUI() {
 
   loadBatchPreviewFromCache();
   if (!getVisibleProducts().length) renderProductsLoading();
-  loadProducts();
-  cmdToOverlay('REQUEST_BATCH_PREVIEW');
+  if (_productLoadStatus.status !== 'loaded') loadProducts();
   renderFireConfig();
 }

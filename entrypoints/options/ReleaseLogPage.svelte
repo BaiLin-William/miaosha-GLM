@@ -16,6 +16,31 @@
 
   const LOGS: LogItem[] = [
     {
+      category: 'feature',
+      title: '火山引擎双活动垂直切片',
+      body: 'Agent Plan 与 Coding Plan 完全拆分为独立的 MAIN-world 覆盖层、content script、平台适配器与订单流水线。每个活动维护自己的 bundle 解析、动态定价与下单逻辑，互不干扰，方便后续活动快速复制。',
+    },
+    {
+      category: 'feature',
+      title: '动态定价与订单索引自愈',
+      body: '价格不再写死，改为实时调用 /api/sales/calculatePriceV5 获取原价与折扣价。解析 bundle 时收集同一 (ConfigurationCode, Duration) 的所有候选 IndexKey，遇到 InvalidParameter.Configuration 自动重试下一个索引，规避火山引擎侧配置不一致导致的误失败。',
+    },
+    {
+      category: 'improvement',
+      title: '火山引擎覆盖层改为月/季/年标签页',
+      body: '火山引擎浮层从全展开列表改为「月付 / 季付 / 年付」三个标签页，与智谱覆盖层体验保持一致，减少用户滚动与选择负担。',
+    },
+    {
+      category: 'fix',
+      title: 'OK badge 生命周期',
+      body: '购买成功后显示的 OK 角标现在会在 30 分钟后自动清除、用户打开 popup 时清除、以及重新调度秒杀提醒时清除，避免角标长期占用工具栏。',
+    },
+    {
+      category: 'improvement',
+      title: '全局版本标识统一为 v1.4.1',
+      body: 'package.json、README、Options 页、Batch Mode 横幅、Fire Matrix、智谱浮层与火山引擎浮层的版本号全部同步为 v1.4.1；火山引擎浮层版本号由 content script 从 manifest 注入，解决 MAIN world 无法读取 chrome.runtime.getManifest 的问题。',
+    },
+    {
       category: 'improvement',
       title: 'Fire Matrix 调用链路与错误责任主体',
       body: 'Fire Matrix 底部新增可折叠的 /pay/preview 五步调用链路图，标出 401/500/555/sold-out/bizId 在链中的位置。将“验证码校验服务异常”等 raw serverMsg 翻译为【智谱 --> 腾讯验证码核销：超过了 QPS 限制】格式，明确责任主体与调用关系；新增“验证码繁忙/失效/风控”独立 outcome 与统计，避免用户误以为是插件 bug。',

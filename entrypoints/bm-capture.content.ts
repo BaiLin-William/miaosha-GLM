@@ -8,9 +8,11 @@ import { calibrate } from '../lib/api/runtime-calibration';
 import { fireStore, FIRE_CONFIG_DEFAULT, type FireConfig } from '../lib/settings/fire';
 import { SALE_ALARM_MINUTES, SALE_TIME_DEFAULT, getNextSaleTime, saleTimeStore, type SaleTimeConfig } from '../lib/settings/sale-time';
 import { captchaStore } from '../lib/settings/captcha';
+import { bigmodelAdapter } from '../lib/platform';
+import type { PlatformAuth } from '../lib/platform';
+import { createAuthStore } from '../lib/platform/shared/stores';
+import { xhrRequest } from '../lib/platform/adapters/bigmodel/request';
 
-const AUTH_KEY = 'local:authHeaders';
-const BATCH_PREVIEW_KEY = 'local:batchPreview';
 const RUNTIME_CALIBRATION_KEY = 'local:runtimeCalibration';
 const TICKET_TTL_MS = 5 * 60 * 1000; // alpha: 5 minutes per-ticket lifecycle
 let TICKET_POOL_MAX = 100; // synced with captchaConfig.batchSessionLimit (single source of truth)
@@ -193,6 +195,54 @@ async function safeGet<T>(key: string): Promise<T | null> {
 async function safeSet(key: string, value: any): Promise<void> {
   if (!isExtensionContextValid()) return;
   try { await storage.setItem(key, value); } catch {}
+}
+
+// ── Platform adapter shared seams ────────────────────────────────────────────
+const authStore = createAuthStore(true);
+
+function normalizeAuthHeaders(auth: PlatformAuth | null): any {
+  if (!auth) return null;
+  const authorization = auth.headers.authorization?.replace(/^Bearer\s+/i, '') || '';
+  return {
+    authorization,
+    bigmodelOrganization: auth.headers['bigmodel-organization'],
+    bigmodelProject: auth.headers['bigmodel-project'],
+    capturedAt: auth.capturedAt,
+    source: (auth.metadata?.source as string) || 'cache',
+  };
+}
+
+function coerceToPlatformAuth(auth: any): PlatformAuth | null {
+  if (!auth) return null;
+  if (auth.platform === 'bigmodel' && auth.headers?.authorization) {
+    return auth as PlatformAuth;
+  }
+  if (auth.authorization && auth.bigmodelOrganization && auth.bigmodelProject) {
+    return {
+      platform: 'bigmodel',
+      capturedAt: auth.capturedAt || Date.now(),
+      headers: {
+        authorization: String(auth.authorization).replace(/^Bearer\s+/i, ''),
+        'bigmodel-organization': auth.bigmodelOrganization,
+        'bigmodel-project': auth.bigmodelProject,
+      },
+      metadata: { source: auth.source || 'cache' },
+    };
+  }
+  return null;
+}
+
+async function getFreshAuth(): Promise<PlatformAuth | null> {
+  const captured = await bigmodelAdapter.authProbe.capture();
+  if (captured && (await bigmodelAdapter.authProbe.isAuthenticated(captured))) {
+    await authStore.set(captured);
+    return captured;
+  }
+  const cached = authStore.get();
+  if (cached && (await bigmodelAdapter.authProbe.isAuthenticated(cached))) {
+    return cached;
+  }
+  return null;
 }
 
 // ── R3: Flash Sale Reminder ──────────────────────────────────────────────────
@@ -521,10 +571,6 @@ function postToOverlay(msg: any) {
   window.postMessage({ __miaosha_overlay: true, ...msg }, '*');
 }
 
-function isAuthValid(auth: any): boolean {
-  return !!(auth?.authorization && auth?.bigmodelOrganization && auth?.bigmodelProject);
-}
-
 function tokenSuffix(authz: string | undefined): string {
   if (!authz || typeof authz !== 'string') return '';
   const raw = authz.replace(/^Bearer\s+/i, '');
@@ -552,59 +598,26 @@ export default defineContentScript({
     script.onload = () => script.remove();
     (document.head || document.documentElement).appendChild(script);
 
-    async function captureAuthFromPage() {
-      try {
-        const cookies = document.cookie.split(';').reduce((acc, c) => {
-          const [k, ...vParts] = c.trim().split('=');
-          acc[k] = vParts.join('=');
-          return acc;
-        }, {} as Record<string, string>);
-        const jwt = cookies.bigmodel_token_production;
-        const org = localStorage.getItem('Bigmodel-Organization');
-        const proj = localStorage.getItem('Bigmodel-Project');
-        if (!jwt || !org || !proj) return null;
-        const now = Date.now();
-        const auth = {
-          authorization: jwt.startsWith('Bearer ') ? jwt : `Bearer ${jwt}`,
-          bigmodelOrganization: org,
-          bigmodelProject: proj,
-          capturedAt: now,
-          source: 'live-page',
-        };
-        await safeSet(AUTH_KEY, auth);
-        return auth;
-      } catch {
-        return null;
-      }
-    }
-
-    async function getFreshAuthHeaders() {
-      const captured = await captureAuthFromPage();
-      if (isAuthValid(captured)) return captured;
-      const cached = await safeGet<any>(AUTH_KEY);
-      if (isAuthValid(cached)) return cached;
-      return null;
-    }
-
     async function getPrefireAuthStatus() {
-      const auth = await getFreshAuthHeaders();
-      if (!isAuthValid(auth)) {
+      const auth = await getFreshAuth();
+      if (!auth || !(await bigmodelAdapter.authProbe.isAuthenticated(auth))) {
         return {
           ok: false,
           reason: 'missing-auth',
         };
       }
 
+      const legacy = normalizeAuthHeaders(auth);
       const capturedAt = typeof auth.capturedAt === 'number' ? auth.capturedAt : Date.now();
       return {
         ok: true,
-        headers: auth,
-        source: auth.source === 'live-page' ? 'live-page' : 'storage-fallback',
+        headers: legacy,
+        source: legacy.source === 'live-page' ? 'live-page' : 'storage-fallback',
         capturedAt,
         ageMs: Math.max(0, Date.now() - capturedAt),
-        org: auth.bigmodelOrganization,
-        project: auth.bigmodelProject,
-        tokenSuffix: tokenSuffix(auth.authorization),
+        org: legacy.bigmodelOrganization,
+        project: legacy.bigmodelProject,
+        tokenSuffix: tokenSuffix(legacy.authorization),
       };
     }
 
@@ -630,13 +643,14 @@ export default defineContentScript({
       if (calibrationInFlight) return false;
       calibrationInFlight = true;
       try {
-        const authHeaders = await getFreshAuthHeaders();
-        if (!isAuthValid(authHeaders)) return false;
+        const auth = await getFreshAuth();
+        if (!auth || !(await bigmodelAdapter.authProbe.isAuthenticated(auth))) return false;
 
+        const legacy = normalizeAuthHeaders(auth);
         const result = await calibrate({
-          authorization: authHeaders.authorization,
-          bigmodelOrganization: authHeaders.bigmodelOrganization,
-          bigmodelProject: authHeaders.bigmodelProject,
+          authorization: legacy.authorization,
+          bigmodelOrganization: legacy.bigmodelOrganization,
+          bigmodelProject: legacy.bigmodelProject,
         });
 
         if (!Number.isFinite(result.latencyMs) || !Number.isFinite(result.clockOffsetMs) || result.probes.length === 0) {
@@ -689,176 +703,12 @@ export default defineContentScript({
       await scheduleNextRuntimeCalibration();
     }
 
-    // ── SoldOut Watcher (1.0.0.alpha) ─────────────────────────────────────────
-    let soldOutWatcherTimer: ReturnType<typeof setTimeout> | null = null;
-    let soldOutWatcherArmed = false;
-    let lastSoldOutMap: Record<string, boolean> | null = null;
-    let soldOutAlarmFired = false;
-
-    function getSoldOutProbeInterval(msUntilSale: number): number {
-      if (msUntilSale <= 15 * 60 * 1000) return 1000;
-      if (msUntilSale <= 30 * 60 * 1000) return 2000;
-      return 5000;
-    }
-
-    async function runSoldOutProbe(): Promise<string[]> {
-      const authHeaders = await getFreshAuthHeaders();
-      if (!isAuthValid(authHeaders)) return [];
-      try {
-        const res = await fetch('https://bigmodel.cn/api/biz/pay/batch-preview', {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            'content-type': 'application/json;charset=UTF-8',
-            authorization: authHeaders.authorization,
-            'bigmodel-organization': authHeaders.bigmodelOrganization,
-            'bigmodel-project': authHeaders.bigmodelProject,
-          },
-          body: JSON.stringify({ invitationCode: '' }),
-        });
-        const data = await res.json();
-        if (data?.code !== 200 || !Array.isArray(data?.data?.productList)) return [];
-
-        const productList: any[] = data.data.productList;
-        await safeSet(BATCH_PREVIEW_KEY, data);
-        postToOverlay({ type: 'BATCH_PREVIEW_DATA', data: productList });
-
-        const currentMap: Record<string, boolean> = {};
-        for (const p of productList) {
-          currentMap[p.productId] = !!(p.soldOut || p.forbidden || p.canPurchase === false);
-        }
-
-        const cleared: string[] = [];
-        if (lastSoldOutMap !== null) {
-          for (const id of Object.keys(currentMap)) {
-            if (lastSoldOutMap[id] === true && currentMap[id] === false) {
-              cleared.push(id);
-            }
-          }
-        }
-        lastSoldOutMap = currentMap;
-        return cleared;
-      } catch {
-        return [];
-      }
-    }
-
-    async function soldOutWatcherTick() {
-      if (!soldOutWatcherArmed || soldOutAlarmFired) return;
-
-      const cfg = await getSaleConfig();
-      const saleEpoch = getNextSaleTime(cfg);
-      const msUntilSale = saleEpoch - Date.now();
-
-      if (msUntilSale <= EARLY_FIRE_BOUNDARY_MS) {
-        stopSoldOutWatcher();
-        return;
-      }
-
-      const cleared = await runSoldOutProbe();
-
-      if (cleared.length > 0) {
-        soldOutAlarmFired = true;
-        soldOutWatcherArmed = false;
-        void playBeeps(10);
-        postToOverlay({ type: 'SOLDOUT_CLEARED', data: { clearedIds: cleared, detectedAt: Date.now() } });
-        return;
-      }
-
-      if (soldOutWatcherArmed) {
-        if (soldOutWatcherTimer) clearTimeout(soldOutWatcherTimer);
-        soldOutWatcherTimer = setTimeout(soldOutWatcherTick, getSoldOutProbeInterval(Math.max(0, msUntilSale)));
-      }
-    }
-
-    function stopSoldOutWatcher() {
-      if (soldOutWatcherTimer) { clearTimeout(soldOutWatcherTimer); soldOutWatcherTimer = null; }
-      soldOutWatcherArmed = false;
-    }
-
-    async function startSoldOutWatcher() {
-      stopSoldOutWatcher();
-      lastSoldOutMap = null;
-      soldOutAlarmFired = false;
-
-      const cfg = await getSaleConfig();
-      const saleEpoch = getNextSaleTime(cfg);
-      const msUntilSale = saleEpoch - Date.now();
-      const WATCH_WINDOW_MS = 60 * 60 * 1000;
-
-      if (msUntilSale > WATCH_WINDOW_MS) {
-        soldOutWatcherTimer = setTimeout(async () => {
-          soldOutWatcherArmed = true;
-          await soldOutWatcherTick();
-        }, msUntilSale - WATCH_WINDOW_MS);
-      } else if (msUntilSale > EARLY_FIRE_BOUNDARY_MS) {
-        soldOutWatcherArmed = true;
-        await soldOutWatcherTick();
-      }
-    }
-
-    async function fetchBatchPreviewWithAuth() {
-      const authHeaders = await getFreshAuthHeaders();
-      if (!authHeaders?.authorization || !authHeaders?.bigmodelOrganization || !authHeaders?.bigmodelProject) {
-        return null;
-      }
-
-      try {
-        const res = await fetch('https://bigmodel.cn/api/biz/pay/batch-preview', {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            'content-type': 'application/json;charset=UTF-8',
-            authorization: authHeaders.authorization,
-            'bigmodel-organization': authHeaders.bigmodelOrganization,
-            'bigmodel-project': authHeaders.bigmodelProject,
-          },
-          body: JSON.stringify({ invitationCode: '' }),
-        });
-
-        const data = await res.json();
-        if (data?.code === 200 && data?.data?.productList) {
-          await safeSet(BATCH_PREVIEW_KEY, data);
-          return data.data.productList as any[];
-        }
-        return null;
-      } catch {
-        return null;
-      }
-    }
-
-    // ── Batch Preview bridge: storage → MAIN world ──
-    async function pushBatchPreviewToOverlay() {
-      const cached = await safeGet<any>(BATCH_PREVIEW_KEY);
-      if (cached?.data?.productList) {
-        postToOverlay({ type: 'BATCH_PREVIEW_DATA', data: cached.data.productList });
-        return true;
-      }
-      return false;
-    }
-
-    async function refreshBatchPreviewToOverlay() {
-      const fresh = await fetchBatchPreviewWithAuth();
-      if (fresh && fresh.length > 0) {
-        postToOverlay({ type: 'BATCH_PREVIEW_DATA', data: fresh });
-        return true;
-      }
-      return false;
-    }
-
-    pushBatchPreviewToOverlay().then((hasCached) => {
-      if (!hasCached) {
-        refreshBatchPreviewToOverlay();
-      }
-    });
+    // NOTE: batch-preview is intentionally fetched only from the MAIN world
+    // using the page's original uninstrumented fetch. The content script no
+    // longer requests this endpoint because Alibaba WAF blocks any request
+    // originating from the extension's isolated world.
 
     chrome.storage.onChanged.addListener(async (changes, area) => {
-      if (area === 'local' && changes[BATCH_PREVIEW_KEY]) {
-        const authHeaders = await getFreshAuthHeaders();
-        if (!isAuthValid(authHeaders)) return;
-        const newList = changes[BATCH_PREVIEW_KEY].newValue?.data?.productList;
-        if (newList) postToOverlay({ type: 'BATCH_PREVIEW_DATA', data: newList });
-      }
       if (area === 'local' && changes['local:captchaConfig']) {
         syncCaptchaConfig(true);
       }
@@ -914,25 +764,29 @@ export default defineContentScript({
 
     // ── Poll payment status ──
     async function pollPayCheck(
-      authHeaders: any,
+      authArg: any,
       bizId: string,
       onUpdate: (status: 'SUCCESS' | 'EXPIRE' | 'timeout') => void,
     ) {
+      const legacy = normalizeAuthHeaders(coerceToPlatformAuth(authArg));
+      if (!legacy) return;
       const MAX_MS = 5 * 60 * 1000;
       const INTERVAL_MS = 1500;
       const start = Date.now();
       while (Date.now() - start < MAX_MS) {
         try {
-          const res = await fetch(`https://bigmodel.cn/api/biz/pay/check?bizId=${encodeURIComponent(bizId)}`, {
+          const res = await xhrRequest<{ code?: number; data?: { status?: string } | string }>({
             method: 'GET',
-            credentials: 'include',
+            url: `https://bigmodel.cn/api/biz/pay/check?bizId=${encodeURIComponent(bizId)}`,
+            withCredentials: true,
             headers: {
-              authorization: authHeaders.authorization,
-              'bigmodel-organization': authHeaders.bigmodelOrganization,
-              'bigmodel-project': authHeaders.bigmodelProject,
+              Accept: 'application/json, text/plain, */*',
+              Authorization: legacy.authorization,
+              'Bigmodel-Organization': legacy.bigmodelOrganization,
+              'Bigmodel-Project': legacy.bigmodelProject,
             },
           });
-          const data = await res.json();
+          const data = res.data;
           const status = data?.data?.status ?? data?.data;
           if (status === 'SUCCESS' || status === 'success' || status === true || data?.code === 200) {
             onUpdate('SUCCESS');
@@ -969,10 +823,16 @@ export default defineContentScript({
 
     function queueFireTimers(
       shots: AutoFirePlanShot[],
-      authHeaders: any,
+      authArg: any,
       timers: ReturnType<typeof setTimeout>[],
       state: { succeeded: boolean },
     ) {
+      const auth = coerceToPlatformAuth(authArg);
+      if (!auth) {
+        postToOverlay({ type: 'FIRE_RESULT', line: '> No auth headers' });
+        return () => {};
+      }
+
       const total = shots.length;
 
       const cancelAll = () => {
@@ -983,25 +843,19 @@ export default defineContentScript({
         if (state.succeeded) return;
         const t1 = Date.now();
         try {
-          const res = await fetch('https://bigmodel.cn/api/biz/pay/preview', {
-            method: 'POST',
-            credentials: 'include',
-            headers: {
-              'content-type': 'application/json;charset=UTF-8',
-              authorization: authHeaders.authorization,
-              'bigmodel-organization': authHeaders.bigmodelOrganization,
-              'bigmodel-project': authHeaders.bigmodelProject,
-            },
-            body: JSON.stringify({ productId: shot.productId, ticket: shot.ticket, randstr: shot.randstr }),
-          });
-          const body = await res.json();
+          const result = await bigmodelAdapter.orderPipeline.run({
+            platform: 'bigmodel',
+            productId: shot.productId,
+            ticket: { ticket: shot.ticket, randstr: shot.randstr, provider: 'tencent-captcha', createdAt: shot.createdAt },
+          }, auth);
           const rtt = Date.now() - t1;
           const tag = describeShot(shot, idx, total);
 
-          if (body.code === 200 && body.data && !body.data.soldOut && body.data.bizId) {
+          if (result.success) {
+            const session = result.data!;
             state.succeeded = true;
             cancelAll();
-            postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ORDER bizId=' + body.data.bizId + ' (' + rtt + 'ms)' });
+            postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ORDER bizId=' + session.bizId + ' (' + rtt + 'ms)' });
             postToOverlay({
               type: 'FIRE_SHOT_RESULT',
               data: {
@@ -1013,21 +867,21 @@ export default defineContentScript({
                 code: 200,
                 rtt,
                 sentAt: t1,
-                bizId: body.data.bizId,
+                bizId: session.bizId,
                 ticketMask: maskTicket(shot.ticket),
                 serverMsg: '',
               },
             });
             const ps = {
-              bizId: body.data.bizId as string,
-              amount: (body.data.thirdPartyAmount ?? body.data.payAmount) as number,
-              productId: (body.data.productId ?? shot.productId) as string,
+              bizId: session.bizId as string,
+              amount: session.amount as number,
+              productId: session.productId as string,
               status: 'pending' as const,
               updatedAt: Date.now(),
             };
             void updatePaymentState(ps);
             postToOverlay({ type: 'BURST_FIRE_SUCCESS', data: ps });
-          } else if (body.code === 200 && body.data?.soldOut) {
+          } else if (result.metadata?.classified?.outcome === 'soldout') {
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': sold-out today (' + rtt + 'ms)' });
             postToOverlay({
               type: 'FIRE_SHOT_RESULT',
@@ -1041,10 +895,10 @@ export default defineContentScript({
                 rtt,
                 sentAt: t1,
                 ticketMask: maskTicket(shot.ticket),
-                serverMsg: body.msg || 'sold out',
+                serverMsg: (result.metadata?.classified as any)?.serverMsg || 'sold out',
               },
             });
-          } else if (body.code === 555) {
+          } else if (result.metadata?.classified?.outcome === 'busy' && (result.metadata?.classified as any)?.code === 555) {
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': server-busy-555 (' + rtt + 'ms)' });
             postToOverlay({
               type: 'FIRE_SHOT_RESULT',
@@ -1058,11 +912,18 @@ export default defineContentScript({
                 rtt,
                 sentAt: t1,
                 ticketMask: maskTicket(shot.ticket),
-                serverMsg: body.msg || 'server busy',
+                serverMsg: (result.metadata?.classified as any)?.serverMsg || 'server busy',
               },
             });
           } else {
-            const cls = classifyPreviewError(body);
+            const raw = result.metadata?.raw as { code?: number; msg?: string } | undefined;
+            const cls = raw ? classifyPreviewError(raw) : {
+              outcome: (result.metadata?.classified as any)?.outcome || 'error',
+              code: (result.metadata?.classified as any)?.code || 500,
+              serverMsg: result.error || 'unknown error',
+              rawServerMsg: result.error || 'unknown error',
+              responsibility: { subject: '智谱/网络', target: '插件', cause: '未知服务端错误' },
+            };
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ' + cls.outcome + ' (' + rtt + 'ms)' });
             postToOverlay({
               type: 'FIRE_SHOT_RESULT',
@@ -1115,7 +976,7 @@ export default defineContentScript({
       return cancelAll;
     }
 
-    async function runAutoFirePlan(startMs: number, authHeaders: any) {
+    async function runAutoFirePlan(startMs: number, authArg: any) {
       const { valid, selectedIds } = await getAutoFireSnapshot();
       if (valid.length === 0) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> No valid tickets' });
@@ -1173,7 +1034,7 @@ export default defineContentScript({
 
       const timers: ReturnType<typeof setTimeout>[] = [];
       const state = { succeeded: false };
-      const cancelAll = queueFireTimers(allShots, authHeaders, timers, state);
+      const cancelAll = queueFireTimers(allShots, authArg, timers, state);
       const lastScheduledAt = allShots.reduce((latest, shot) => Math.max(latest, shot.scheduledAt), startMs);
 
       timers.push(setTimeout(() => {
@@ -1196,7 +1057,13 @@ export default defineContentScript({
       pollPayment: boolean;
     }
 
-    async function runStrikeSequence(startMs: number, authHeaders: any, options: StrikeSequenceOptions) {
+    async function runStrikeSequence(startMs: number, authArg: any, options: StrikeSequenceOptions) {
+      const auth = coerceToPlatformAuth(authArg);
+      if (!auth) {
+        postToOverlay({ type: 'FIRE_RESULT', line: '> No auth headers' });
+        return;
+      }
+
       const { valid, targets, fireConfig } = await getLaunchSnapshot();
       if (valid.length === 0) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> No valid tickets' });
@@ -1266,33 +1133,26 @@ export default defineContentScript({
         const tag = '>[#' + (idx + 1) + '/' + total + '][P' + shot.priority + '] ' + shot.productId.slice(-6);
         const t1 = Date.now();
         try {
-          const res = await fetch('https://bigmodel.cn/api/biz/pay/preview', {
-            method: 'POST',
-            signal: previewAbortCtrl.signal,
-            credentials: 'include',
-            headers: {
-              'content-type': 'application/json;charset=UTF-8',
-              authorization: authHeaders.authorization,
-              'bigmodel-organization': authHeaders.bigmodelOrganization,
-              'bigmodel-project': authHeaders.bigmodelProject,
-            },
-            body: JSON.stringify({ productId: shot.productId, ticket: shot.ticket, randstr: shot.randstr }),
-          });
+          const result = await bigmodelAdapter.orderPipeline.run({
+            platform: 'bigmodel',
+            productId: shot.productId,
+            ticket: { ticket: shot.ticket, randstr: shot.randstr, provider: 'tencent-captcha', createdAt: shot.createdAt },
+          }, auth);
           if (cancelled) return 'cancelled';
-          const body = await res.json();
           const rtt = Date.now() - t1;
 
-          if (body.code === 200 && body.data && !body.data.soldOut && body.data.bizId) {
+          if (result.success) {
+            const session = result.data!;
             succeeded = true;
             cancelAll();
-            const bizId = body.data.bizId as string;
-            const amount = (body.data.thirdPartyAmount ?? body.data.payAmount) as number;
-            const productId = (body.data.productId ?? shot.productId) as string;
+            const bizId = session.bizId as string;
+            const amount = session.amount as number;
+            const productId = session.productId as string;
             const ps = {
               bizId,
               amount,
               productId,
-              qrCode: body.data.qrCode || null,
+              qrCode: session.qrCode || null,
               payType: fireConfig.payType,
               status: 'pending' as const,
               updatedAt: Date.now(),
@@ -1305,7 +1165,7 @@ export default defineContentScript({
               data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'success', code: 200, rtt, sentAt: t1, bizId, ticketMask: maskTicket(shot.ticket), serverMsg: '' },
             });
             if (options.pollPayment) {
-              void pollPayCheck(authHeaders, bizId, (status) => {
+              void pollPayCheck(auth, bizId, (status) => {
                 if (status === 'SUCCESS') {
                   void updatePaymentState({ status: 'success' });
                   postToOverlay({ type: 'STRIKE_PAYMENT_SUCCESS', data: { bizId, orderId: bizId } });
@@ -1322,16 +1182,23 @@ export default defineContentScript({
               });
             }
             return 'success';
-          } else if (body.code === 200 && body.data?.soldOut) {
+          } else if (result.metadata?.classified?.outcome === 'soldout') {
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': sold-out today (' + rtt + 'ms)' });
-            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'soldout', code: 200, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), serverMsg: body.msg || 'sold out' } });
+            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'soldout', code: 200, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), serverMsg: (result.metadata?.classified as any)?.serverMsg || 'sold out' } });
             return 'soldout';
-          } else if (body.code === 555) {
+          } else if (result.metadata?.classified?.outcome === 'busy' && (result.metadata?.classified as any)?.code === 555) {
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': server-busy-555 (' + rtt + 'ms)' });
-            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'busy', code: 555, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), serverMsg: body.msg || 'server busy' } });
+            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'busy', code: 555, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), serverMsg: (result.metadata?.classified as any)?.serverMsg || 'server busy' } });
             return 'busy';
           } else {
-            const cls = classifyPreviewError(body);
+            const raw = result.metadata?.raw as { code?: number; msg?: string } | undefined;
+            const cls = raw ? classifyPreviewError(raw) : {
+              outcome: (result.metadata?.classified as any)?.outcome || 'error',
+              code: (result.metadata?.classified as any)?.code || 500,
+              serverMsg: result.error || 'unknown error',
+              rawServerMsg: result.error || 'unknown error',
+              responsibility: { subject: '智谱/网络', target: '插件', cause: '未知服务端错误' },
+            };
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ' + cls.outcome + ' (' + rtt + 'ms)' });
             postToOverlay({
               type: 'FIRE_SHOT_RESULT',
@@ -1417,12 +1284,12 @@ export default defineContentScript({
     }
 
     async function strike(startMs: number, authOverride?: any) {
-      const authHeaders = isAuthValid(authOverride) ? authOverride : await getFreshAuthHeaders();
-      if (!isAuthValid(authHeaders)) {
+      const auth = coerceToPlatformAuth(authOverride) || (await getFreshAuth());
+      if (!auth || !(await bigmodelAdapter.authProbe.isAuthenticated(auth))) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> No auth headers' });
         return;
       }
-      await runStrikeSequence(startMs, authHeaders, {
+      await runStrikeSequence(startMs, auth, {
         label: 'Strike',
         mode: 'manual',
         enableBusyBackoff: true,
@@ -1431,12 +1298,12 @@ export default defineContentScript({
     }
 
     async function burstStrike(startMs: number, authOverride?: any) {
-      const authHeaders = isAuthValid(authOverride) ? authOverride : await getFreshAuthHeaders();
-      if (!isAuthValid(authHeaders)) {
+      const auth = coerceToPlatformAuth(authOverride) || (await getFreshAuth());
+      if (!auth || !(await bigmodelAdapter.authProbe.isAuthenticated(auth))) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> No auth headers' });
         return;
       }
-      await runStrikeSequence(startMs, authHeaders, {
+      await runStrikeSequence(startMs, auth, {
         label: 'BURST',
         mode: 'burst',
         burstIntervalMs: 200,
@@ -1546,18 +1413,6 @@ export default defineContentScript({
         if (event.data.type === 'OPEN_OPTIONS_PAGE') {
           try { chrome.runtime.sendMessage({ type: 'OPEN_OPTIONS_PAGE' }); } catch {}
         }
-        if (event.data.type === 'REQUEST_BATCH_PREVIEW') {
-          const pushed = await pushBatchPreviewToOverlay();
-          if (!pushed) {
-            await refreshBatchPreviewToOverlay();
-          }
-        }
-        if (event.data.type === 'REFRESH_BATCH_PREVIEW') {
-          await refreshBatchPreviewToOverlay();
-        }
-        if (event.data.type === 'CLEAR_BATCH_PREVIEW_CACHE') {
-          try { await chrome.storage.local.remove(BATCH_PREVIEW_KEY); } catch {}
-        }
         if (event.data.type === 'CLEAR_TICKET_POOL') {
           clearPageTicketStore();
           const info = await getTicketInfo();
@@ -1632,7 +1487,6 @@ export default defineContentScript({
     }, 2000);
 
     void startRuntimeCalibrationLoop();
-    void startSoldOutWatcher();
 
     // R3: Start flash sale reminder loop
     initReminderLoop();

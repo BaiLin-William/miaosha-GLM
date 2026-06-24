@@ -10,8 +10,8 @@
 
 <div class="topbar">
   <div class="brand">
-    <div class="brand-icon">Z</div>
-    <div class="brand-text">智谱秒杀助手</div>
+    <div class="brand-mark">Z</div>
+    <div class="brand-text">Coding Plan 秒杀助手</div>
     <span class="ver">v{version}</span>
   </div>
   <div class="pill-toggle">
@@ -30,76 +30,80 @@
 
 <style>
   .topbar {
-    padding: 14px 16px 10px;
+    flex: 0 0 auto;
+    padding: 12px 14px 10px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    background: rgba(255, 255, 255, 0.7);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border-bottom: 1px solid #e2e8f0;
+    background: #ffffff;
+    border-bottom: 1.5px solid #0c1224;
   }
 
   .brand {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
   }
 
-  .brand-icon {
-    width: 32px;
-    height: 32px;
-    border-radius: 10px;
-    background: linear-gradient(135deg, #6366f1, #a78bfa);
+  .brand-mark {
+    width: 28px;
+    height: 28px;
+    border: 1.5px solid #0c1224;
+    border-radius: 6px;
+    background: #0c1224;
+    color: #f5f3ee;
     display: grid;
     place-items: center;
-    font-size: 14px;
-    font-weight: 900;
-    color: #fff;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
   }
 
   .brand-text {
-    font-size: 13px;
-    font-weight: 800;
-    color: #1e293b;
+    font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    color: #0c1224;
+    letter-spacing: -0.1px;
   }
 
   .ver {
+    font-family: 'JetBrains Mono', monospace;
     font-size: 9px;
-    font-weight: 800;
-    color: #6366f1;
-    background: rgba(99, 102, 241, 0.1);
-    padding: 2px 7px;
-    border-radius: 999px;
-    border: 1px solid rgba(99, 102, 241, 0.2);
-    margin-left: 4px;
+    font-weight: 700;
+    color: #0c1224;
+    background: #fafaf7;
+    padding: 2px 6px;
+    border: 1px solid #0c1224;
+    border-radius: 4px;
+    margin-left: 2px;
   }
 
   .pill-toggle {
     display: flex;
-    background: #f1f5f9;
-    border-radius: 10px;
-    padding: 3px;
-    border: 1px solid #e2e8f0;
+    background: #fafaf7;
+    border: 1.5px solid #0c1224;
+    border-radius: 6px;
+    padding: 2px;
   }
 
   .pill-btn {
-    padding: 5px 14px;
-    border-radius: 8px;
+    padding: 4px 12px;
     border: 0;
     background: transparent;
-    font-family: inherit;
-    font-size: 10px;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
     font-weight: 700;
     cursor: pointer;
-    color: #94a3b8;
-    transition: all 0.2s;
-    letter-spacing: 0.02em;
+    color: #6a7496;
+    letter-spacing: 0.1em;
+    transition: all 0.15s;
   }
 
   .pill-btn.active {
-    background: #6366f1;
-    color: #fff;
-    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.25);
+    background: #0c1224;
+    color: #f5f3ee;
   }
 </style>
