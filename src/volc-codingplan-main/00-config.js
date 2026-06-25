@@ -2,7 +2,7 @@
 const __volc_codingplan_version =
   (typeof document !== 'undefined' && document.currentScript?.dataset?.version) ||
   (typeof chrome !== 'undefined' && chrome?.runtime?.getManifest?.()?.version) ||
-  '1.4.1';
+  '1.4.2';
 
 const __volc_codingplan_config = {
   platform: 'volcengine-codingplan',

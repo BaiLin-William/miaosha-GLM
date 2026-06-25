@@ -13,7 +13,7 @@
     usage:       { kicker: 'Documentation', title: '使用说明',         subtitle: 'Fire 面板四控件含义、4 种组合与 Preload → Strike → Commit 完整链路。' },
     architecture:{ kicker: 'Documentation', title: '软件架构',         subtitle: 'architecture.md 的网页版摘要：整体架构、入口点、同源代理、auth 与 ticket 系统。' },
     insights:    { kicker: 'Documentation', title: '关键洞察',         subtitle: '通过真实实验推断的智谱后端限流算法与单用户最优发射节奏。' },
-    'release-log': { kicker: 'Release Notes', title: 'v1.4.1 更新日志', subtitle: '火山引擎 Agent Plan / Coding Plan 垂直切片、动态定价、订单索引自愈、OK badge 生命周期与全局版本标识。' },
+    'release-log': { kicker: 'Release Notes', title: 'v1.4.2 更新日志', subtitle: '火山引擎覆盖层登录态守卫、Wave 轮询模式、默认刷新间隔调整为 0.5s、calculatePriceV5 失败重试与日志降噪。' },
   };
 </script>
 

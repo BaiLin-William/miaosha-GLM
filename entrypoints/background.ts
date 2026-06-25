@@ -24,6 +24,7 @@ const BADGE_STYLES: Record<number, { text: string; color: string; desc: string }
 };
 
 const OK_BADGE_TTL_MS = 30 * 60_000;
+const BADGE_CALIBRATE_INTERVAL_MIN = 5;
 
 async function showFlashNotification(min: number) {
   const message = min >= 60
@@ -108,6 +109,28 @@ export function getCurrentBadgePhase(saleTime: number, now: number): number | nu
   return null;
 }
 
+export interface BadgeState {
+  text: string;
+  color: string;
+  title: string;
+}
+
+/**
+ * Determine the badge that should be visible at a given moment.
+ * Returns null when no badge should be shown.
+ */
+export function getBadgeStateForTime(saleTime: number, now: number): BadgeState | null {
+  const phase = getCurrentBadgePhase(saleTime, now);
+  if (phase) {
+    const style = BADGE_STYLES[phase];
+    return { text: style.text, color: style.color, title: style.desc };
+  }
+  if (now >= saleTime && now < saleTime + 60_000) {
+    return { text: '🔥', color: '#dc2626', title: '秒杀进行中！' };
+  }
+  return null;
+}
+
 export async function rescheduleSaleAlarms(reason = 'runtime') {
   const config = await saleTimeStore.get();
   const snapshot = createSaleAlarmStatusSnapshot(config, Date.now(), reason);
@@ -126,6 +149,49 @@ export async function rescheduleSaleAlarms(reason = 'runtime') {
   return snapshot;
 }
 
+/**
+ * Schedule all countdown badge alarms and synchronize the visible badge.
+ * Called on install/startup and after sale-time changes.
+ */
+export async function scheduleBadgeAlerts({ preserveBadge = false } = {}) {
+  if (!preserveBadge) {
+    chrome.action.setBadgeText({ text: '' });
+    chrome.action.setTitle({ title: '' });
+  }
+  const config = await saleTimeStore.get();
+  const saleTime = getNextSaleTime(config);
+  const now = Date.now();
+
+  // Clear stale badge alarms and re-schedule.
+  await Promise.all([
+    ...SALE_ALARM_MINUTES.map((min) => chrome.alarms.clear(`badge-show-${min}`)),
+    ...SALE_ALARM_MINUTES.map((min) => chrome.alarms.clear(`badge-hide-${min}`)),
+    chrome.alarms.clear('badge-fire'),
+    chrome.alarms.clear('badge-fire-hide'),
+    chrome.alarms.clear('badge-ok-clear'),
+    chrome.alarms.clear('badge-calibrate'),
+  ]);
+
+  const { show, hide } = computeBadgeAlarmPlan(saleTime, now);
+  for (const alarm of [...show, ...hide]) {
+    chrome.alarms.create(alarm.name, { when: alarm.when });
+  }
+
+  // Periodic calibration alarm: re-sync the visible badge in case a
+  // service-worker restart caused an alarm to be missed.
+  chrome.alarms.create('badge-calibrate', { periodInMinutes: BADGE_CALIBRATE_INTERVAL_MIN });
+
+  // If we wake up inside a one-minute badge window, show it now.
+  const state = getBadgeStateForTime(saleTime, now);
+  if (state) {
+    chrome.action.setBadgeText({ text: state.text });
+    chrome.action.setBadgeBackgroundColor({ color: state.color });
+    chrome.action.setTitle({ title: state.title });
+  } else if (!preserveBadge) {
+    // Already cleared above; keep badge blank.
+  }
+}
+
 export default defineBackground(() => {
   function clearBadgeAlerts() {
     chrome.action.setBadgeText({ text: '' });
@@ -138,6 +204,30 @@ export default defineBackground(() => {
     chrome.action.setBadgeText({ text: style.text });
     chrome.action.setBadgeBackgroundColor({ color: style.color });
     chrome.action.setTitle({ title: style.desc });
+  }
+
+  function applyFireBadge() {
+    chrome.action.setBadgeText({ text: '🔥' });
+    chrome.action.setBadgeBackgroundColor({ color: '#dc2626' });
+    chrome.action.setTitle({ title: '秒杀进行中！' });
+  }
+
+  /**
+   * Re-apply the badge that matches the current wall-clock phase without
+   * touching alarms. Used as a recovery path when the service worker restarts
+   * and we only need to sync the visible badge state.
+   */
+  async function syncBadgeToCurrentPhase() {
+    const config = await saleTimeStore.get();
+    const saleTime = getNextSaleTime(config);
+    const state = getBadgeStateForTime(saleTime, Date.now());
+    if (state) {
+      chrome.action.setBadgeText({ text: state.text });
+      chrome.action.setBadgeBackgroundColor({ color: state.color });
+      chrome.action.setTitle({ title: state.title });
+    } else {
+      clearBadgeAlerts();
+    }
   }
 
   // R1 / R4: chrome.alarms — TOP LEVEL registration (not inside async function!)
@@ -167,6 +257,11 @@ export default defineBackground(() => {
         return;
       }
 
+      if (name === 'badge-calibrate') {
+        await syncBadgeToCurrentPhase();
+        return;
+      }
+
       const parts = name.split('-');
       const kind = parts[1];
 
@@ -176,46 +271,11 @@ export default defineBackground(() => {
       } else if (kind === 'hide') {
         clearBadgeAlerts();
       } else if (kind === 'fire') {
-        chrome.action.setBadgeText({ text: '🔥' });
-        chrome.action.setBadgeBackgroundColor({ color: '#dc2626' });
-        chrome.action.setTitle({ title: '秒杀进行中！' });
+        applyFireBadge();
       }
       return;
     }
   });
-
-  // R4: Badge update — each countdown badge is shown for exactly one minute.
-  async function scheduleBadgeAlerts() {
-    clearBadgeAlerts();
-    const config = await saleTimeStore.get();
-    const saleTime = getNextSaleTime(config);
-    const now = Date.now();
-
-    // Clear stale badge alarms and re-schedule.
-    await Promise.all([
-      ...SALE_ALARM_MINUTES.map((min) => chrome.alarms.clear(`badge-show-${min}`)),
-      ...SALE_ALARM_MINUTES.map((min) => chrome.alarms.clear(`badge-hide-${min}`)),
-      chrome.alarms.clear('badge-fire'),
-      chrome.alarms.clear('badge-fire-hide'),
-      chrome.alarms.clear('badge-ok-clear'),
-    ]);
-
-    const { show, hide } = computeBadgeAlarmPlan(saleTime, now);
-    for (const alarm of [...show, ...hide]) {
-      chrome.alarms.create(alarm.name, { when: alarm.when });
-    }
-
-    // If we wake up inside a one-minute badge window, show it now.
-    const currentPhase = getCurrentBadgePhase(saleTime, now);
-    if (currentPhase) {
-      applyBadgeForMin(currentPhase);
-    } else if (now >= saleTime && now < saleTime + 60_000) {
-      // T-0 fire badge window
-      chrome.action.setBadgeText({ text: '🔥' });
-      chrome.action.setBadgeBackgroundColor({ color: '#dc2626' });
-      chrome.action.setTitle({ title: '秒杀进行中！' });
-    }
-  }
 
   // On extension install: schedule both
   chrome.runtime.onInstalled.addListener(() => {
@@ -228,6 +288,25 @@ export default defineBackground(() => {
     rescheduleSaleAlarms('startup');
     scheduleBadgeAlerts();
   });
+
+  // Insurance: MV3 service workers can be terminated and restarted without
+  // firing onInstalled/onStartup. Re-sync badge alarms on every load so a
+  // stuck badge (e.g. 60 still showing past its one-minute window) recovers.
+  (async () => {
+    const existing = await chrome.alarms.getAll();
+    const hasCountdownAlarms = existing.some(
+      (a) =>
+        a.name.startsWith('badge-show-') ||
+        a.name.startsWith('badge-hide-') ||
+        a.name === 'badge-fire' ||
+        a.name === 'badge-fire-hide',
+    );
+    if (!hasCountdownAlarms) {
+      await scheduleBadgeAlerts();
+    } else {
+      await syncBadgeToCurrentPhase();
+    }
+  })().catch(() => undefined);
 
   // Proxy platform API requests from content/popup contexts through the
   // service worker. The MAIN world now fetches /api/biz/pay/batch-preview
@@ -284,9 +363,12 @@ export default defineBackground(() => {
     if (msg.type === 'SALE_TIME_UPDATED') {
       saleTimeStore.set(msg.config)
         .then(() => rescheduleSaleAlarms('manual-confirm'))
-        .then((alarmStatus) => {
-          scheduleBadgeAlerts();
+        .then(async (alarmStatus) => {
+          await scheduleBadgeAlerts();
           sendResponse({ ok: true, alarmStatus });
+        })
+        .catch((err) => {
+          sendResponse({ ok: false, error: err?.message || String(err) });
         });
       return true;
     }

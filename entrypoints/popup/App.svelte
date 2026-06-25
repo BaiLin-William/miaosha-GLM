@@ -17,9 +17,11 @@
   });
 
   onMount(() => {
-    // Acknowledge a transient purchase-success badge when the user opens the popup.
+    // Acknowledge a transient purchase-success or countdown badge when the user
+    // opens the popup. This gives the user a manual escape hatch if an alarm
+    // was missed and the badge got stuck (e.g. 60 still showing at T-30).
     chrome.action.getBadgeText({}).then((text) => {
-      if (text === 'OK') {
+      if (text === 'OK' || /^(60|30|15|10|5!|🔥)$/.test(text)) {
         chrome.action.setBadgeText({ text: '' });
         chrome.action.setTitle({ title: '' });
       }

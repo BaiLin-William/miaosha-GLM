@@ -6,6 +6,7 @@ async function __volc_codingplan_tryOrder(product, indexKey) {
   const webId = cookies['monitor_huoshan_web_id'];
   if (!csrf || !webId) {
     __volc_codingplan_setStatus('未登录，无法刷新库存');
+    __volc_codingplan_stopRefresh('未登录，已停止刷新');
     return { ok: false, retryable: false };
   }
 

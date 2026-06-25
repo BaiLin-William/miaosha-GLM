@@ -1,5 +1,17 @@
 // Dynamic pricing via Volcengine calculatePriceV5 for Agent Plan.
 
+const __volc_agentplan_PRICE_RETRY_MAX = 3;
+const __volc_agentplan_PRICE_RETRY_BASE_MS = 300;
+
+function __volc_agentplan_isRetryableNetworkError(err) {
+  // AbortError is intentional — don't retry.
+  if (err && err.name === 'AbortError') return false;
+  // fetch() throws TypeError for transient network failures such as
+  // ERR_CONNECTION_CLOSED, ERR_NETWORK_CHANGED, ERR_CERT_AUTHORITY_INVALID,
+  // DNS failures, and CORS preflight failures.
+  return err instanceof TypeError || (err && err.name === 'TypeError');
+}
+
 async function __volc_agentplan_fetchPrice(configBody) {
   const cookies = __volc_agentplan_getCookies();
   const csrf = cookies['csrfToken'];
@@ -38,28 +50,39 @@ async function __volc_agentplan_fetchPrice(configBody) {
     }],
   });
 
-  try {
-    const res = await fetch('https://www.volcengine.com/api/sales/calculatePriceV5', {
-      method: 'POST',
-      credentials: 'include',
-      headers: headers,
-      body: body,
-    });
-    const data = await res.json();
-    const error = data.ResponseMetadata?.Error;
-    if (error) {
-      console.warn('[volc-agentplan-main] calculatePriceV5 error', error);
-      return null;
+  let lastError = null;
+  for (let attempt = 1; attempt <= __volc_agentplan_PRICE_RETRY_MAX; attempt++) {
+    try {
+      const res = await fetch('https://www.volcengine.com/api/sales/calculatePriceV5', {
+        method: 'POST',
+        credentials: 'include',
+        headers: headers,
+        body: body,
+      });
+      const data = await res.json();
+      const error = data.ResponseMetadata?.Error;
+      if (error) {
+        console.warn('[volc-agentplan-main] calculatePriceV5 error', error);
+        return null;
+      }
+      const result = data.Result || {};
+      return {
+        original: parseFloat(result.TotalOriginalAmount) || 0,
+        current: parseFloat(result.TotalDiscountAmount) || 0,
+      };
+    } catch (e) {
+      lastError = e;
+      if (!__volc_agentplan_isRetryableNetworkError(e) || attempt >= __volc_agentplan_PRICE_RETRY_MAX) {
+        break;
+      }
+      const delay = __volc_agentplan_PRICE_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+      console.debug('[volc-agentplan-main] calculatePriceV5 transient failure (attempt ' + attempt + '/' + __volc_agentplan_PRICE_RETRY_MAX + '), retry in ' + delay + 'ms', e?.message || e);
+      await new Promise(function (resolve) { setTimeout(resolve, delay); });
     }
-    const result = data.Result || {};
-    return {
-      original: parseFloat(result.TotalOriginalAmount) || 0,
-      current: parseFloat(result.TotalDiscountAmount) || 0,
-    };
-  } catch (e) {
-    console.warn('[volc-agentplan-main] calculatePriceV5 failed', e);
-    return null;
   }
+
+  console.warn('[volc-agentplan-main] calculatePriceV5 failed after ' + __volc_agentplan_PRICE_RETRY_MAX + ' attempts: ' + (lastError?.message || lastError));
+  return null;
 }
 
 async function __volc_agentplan_fetchAllPrices(items) {

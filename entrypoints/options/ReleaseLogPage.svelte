@@ -17,6 +17,31 @@
   const LOGS: LogItem[] = [
     {
       category: 'feature',
+      title: '火山引擎覆盖层登录态守卫与一键登录',
+      body: '未登录时「开始刷新库存」按钮变为「请先登录」，点击后直接触发页面登录弹窗或跳转登录页；刷新过程中如果登录态失效会自动停止，避免无意义空转。',
+    },
+    {
+      category: 'improvement',
+      title: 'Wave 轮询模式',
+      body: '火山引擎 Agent Plan / Coding Plan 的刷新逻辑从 setInterval 单商品轮询改为 Wave 模式：每一轮按选中顺序依次尝试所有商品，任意一个下单成功即停止并跳转支付；一轮结束后再等待间隔进入下一轮，避免请求重叠。',
+    },
+    {
+      category: 'improvement',
+      title: '默认刷新间隔调整为 0.5s',
+      body: '火山引擎覆盖层的默认刷新间隔从 10s 下调至 0.5s，并保留 0.5s~10s 的可调范围，提升抢购响应速度。',
+    },
+    {
+      category: 'fix',
+      title: 'calculatePriceV5 网络失败重试与日志降噪',
+      body: '火山引擎动态定价接口偶发 TypeError: Failed to fetch 时，现在会自动进行最多 3 次指数退避重试；重试日志降级为 console.debug，最终失败以字符串警告输出，避免 transient 网络抖动被 Chrome 扩展 Errors 页误报为插件错误。',
+    },
+    {
+      category: 'improvement',
+      title: '全局版本标识统一为 v1.4.2',
+      body: 'package.json、README、Options 页、智谱浮层、Fire Matrix 与火山引擎浮层的版本号全部同步为 v1.4.2。',
+    },
+    {
+      category: 'feature',
       title: '火山引擎双活动垂直切片',
       body: 'Agent Plan 与 Coding Plan 完全拆分为独立的 MAIN-world 覆盖层、content script、平台适配器与订单流水线。每个活动维护自己的 bundle 解析、动态定价与下单逻辑，互不干扰，方便后续活动快速复制。',
     },

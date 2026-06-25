@@ -4,8 +4,8 @@
  * These tests protect against the recurring bug where the Target Products
  * card stays in "No products loaded" because a content-script proxy for
  * /api/biz/pay/batch-preview is blocked by Alibaba WAF. Product loading now
- * fetches directly from the MAIN world using the original uninstrumented
- * page fetch.
+ * fetches directly from the MAIN world using the page's current fetch (which
+ * includes Sentry instrumentation headers that avoid WAF/rate-limit 555).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -19,6 +19,16 @@ const FIXTURE_PRODUCT_LIST = [
 
 function flushPromises() {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function captureTimeouts(S: BmMainScope) {
+  const captured: Array<{ fn: Function; ms: number }> = [];
+  S.setTimeout = ((fn: Function, ms?: number) => {
+    captured.push({ fn, ms: ms || 0 });
+    return captured.length;
+  }) as any;
+  S.clearTimeout = () => {};
+  return captured;
 }
 
 function makeAuthSandbox(S: BmMainScope) {
@@ -38,15 +48,23 @@ describe('loadProducts', () => {
     makeAuthSandbox(S);
   });
 
-  it('fetches batch-preview directly from the MAIN world using the original page fetch', async () => {
+  it('fetches batch-preview via window.fetch with page-mimicking headers', async () => {
     const postMessage = vi.fn();
     (S.window as any).postMessage = postMessage;
     const fetch = vi.fn().mockResolvedValue({
       json: () => Promise.resolve({ code: 200, data: { productList: FIXTURE_PRODUCT_LIST } }),
     });
-    (S.window as any).__bm_originalFetch = fetch;
+    (S.window as any).fetch = fetch;
 
+    const captured = captureTimeouts(S);
     (S.loadProducts as () => void)();
+    await flushPromises();
+
+    // The first attempt is deferred by BACKOFF_MS[0].
+    expect(captured.length).toBe(1);
+    expect(captured[0].ms).toBe(2500);
+
+    captured[0].fn();
     await flushPromises();
 
     expect(postMessage).not.toHaveBeenCalledWith(
@@ -60,9 +78,11 @@ describe('loadProducts', () => {
         method: 'POST',
         credentials: 'include',
         headers: expect.objectContaining({
-          authorization: 'Bearer eyJhbGci.test.token',
+          authorization: 'eyJhbGci.test.token',
           'bigmodel-organization': 'org-test',
           'bigmodel-project': 'proj-test',
+          accept: 'application/json, text/plain, */*',
+          'set-language': 'zh',
         }),
         body: '{"invitationCode":""}',
       }),
@@ -71,18 +91,17 @@ describe('loadProducts', () => {
     expect(((S._productMatrix as any).yearly || []).length).toBe(1);
   });
 
-  it('falls back to window.fetch when the original fetch is not saved', async () => {
+  it('reuses cached page fetch data when available', async () => {
     const fetch = vi.fn().mockResolvedValue({
       json: () => Promise.resolve({ code: 200, data: { productList: FIXTURE_PRODUCT_LIST } }),
     });
-    S.fetch = fetch;
     (S.window as any).fetch = fetch;
-    delete (S.window as any).__bm_originalFetch;
+    (S.window as any).__bm_batchPreviewData = FIXTURE_PRODUCT_LIST;
 
     (S.loadProducts as () => void)();
     await flushPromises();
 
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).not.toHaveBeenCalled();
     expect((S._productLoadStatus as any).status).toBe('loaded');
   });
 
@@ -90,9 +109,12 @@ describe('loadProducts', () => {
     const fetch = vi.fn().mockResolvedValue({
       json: () => Promise.resolve({ code: 200, data: { productList: FIXTURE_PRODUCT_LIST } }),
     });
-    (S.window as any).__bm_originalFetch = fetch;
+    (S.window as any).fetch = fetch;
 
+    const captured = captureTimeouts(S);
     (S.loadProducts as () => void)();
+    await flushPromises();
+    captured[0].fn();
     await flushPromises();
 
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -119,21 +141,28 @@ describe('loadProducts', () => {
     }).mockResolvedValue({
       json: () => Promise.resolve({ code: 555, msg: 'System busy' }),
     });
-    (S.window as any).__bm_originalFetch = fetch;
+    (S.window as any).fetch = fetch;
 
+    // Initial load.
     (S.loadProducts as () => void)();
+    await flushPromises();
+    captured.shift()?.fn();
     await flushPromises();
 
     expect((S._productLoadStatus as any).status).toBe('loaded');
     expect(((S._productMatrix as any).yearly || []).length).toBe(1);
 
+    // Force refresh: run all three deferred attempts; final failure should not
+    // overwrite the already-loaded matrix.
     (S.loadProducts as (force: boolean) => void)(true);
     await flushPromises();
 
-    captured[captured.length - 1].fn();
-    await flushPromises();
+    for (let i = 0; i < 3 && captured.length > 0; i++) {
+      captured.shift()?.fn();
+      await flushPromises();
+    }
 
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenCalledTimes(4); // 1 initial + 3 forced retries
     expect((S._productLoadStatus as any).status).toBe('loaded');
     expect(((S._productMatrix as any).yearly || []).length).toBe(1);
   });
@@ -142,9 +171,12 @@ describe('loadProducts', () => {
     const fetch = vi.fn().mockResolvedValue({
       json: () => Promise.resolve({ code: 1001, msg: 'unauthorized' }),
     });
-    (S.window as any).__bm_originalFetch = fetch;
+    (S.window as any).fetch = fetch;
 
+    const captured = captureTimeouts(S);
     (S.loadProducts as () => void)();
+    await flushPromises();
+    captured[0].fn();
     await flushPromises();
 
     expect((S._productLoadStatus as any).status).toBe('error');
@@ -162,18 +194,19 @@ describe('loadProducts', () => {
     const fetch = vi.fn().mockResolvedValue({
       json: () => Promise.resolve({ code: 500, msg: 'server error' }),
     });
-    (S.window as any).__bm_originalFetch = fetch;
+    (S.window as any).fetch = fetch;
 
     (S.loadProducts as () => void)();
     await flushPromises();
 
-    expect(fetch).toHaveBeenCalledTimes(1);
     expect(captured.length).toBe(1);
+    // Trigger all three attempts; the last one should surface the error.
+    for (let i = 0; i < 3 && captured.length > 0; i++) {
+      captured.shift()?.fn();
+      await flushPromises();
+    }
 
-    captured[0].fn();
-    await flushPromises();
-
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(3);
     expect((S._productLoadStatus as any).status).toBe('error');
   });
 
@@ -186,15 +219,18 @@ describe('loadProducts', () => {
     S.clearTimeout = () => {};
 
     const fetch = vi.fn().mockRejectedValue(new Error('network failure'));
-    (S.window as any).__bm_originalFetch = fetch;
+    (S.window as any).fetch = fetch;
 
     (S.loadProducts as () => void)();
     await flushPromises();
 
-    captured[0].fn();
-    await flushPromises();
+    // Trigger all three attempts; the last one should surface the error.
+    for (let i = 0; i < 3 && captured.length > 0; i++) {
+      captured.shift()?.fn();
+      await flushPromises();
+    }
 
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(3);
     expect((S._productLoadStatus as any).status).toBe('error');
   });
 

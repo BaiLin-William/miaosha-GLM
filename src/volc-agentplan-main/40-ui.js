@@ -3,15 +3,16 @@
 let __volc_agentplan_catalogData = null;
 let __volc_agentplan_selectedProductIds = new Set();
 let __volc_agentplan_activeTab = null;
+let __volc_agentplan_isExtracting = false;
 let __volc_agentplan_isRefreshing = false;
 let __volc_agentplan_refreshTimer = null;
 let __volc_agentplan_refreshQueue = [];
-let __volc_agentplan_currentRefreshIndex = 0;
 let __volc_agentplan_refreshCount = 0;
+let __volc_agentplan_isLoggedIn = false;
 const __volc_agentplan_MAX_SELECTIONS = 3;
 const __volc_agentplan_MIN_REFRESH_MS = 500;
 const __volc_agentplan_MAX_REFRESH_MS = 10000;
-const __volc_agentplan_DEFAULT_REFRESH_MS = 10000;
+const __volc_agentplan_DEFAULT_REFRESH_MS = 500;
 let __volc_agentplan_refreshIntervalMs = __volc_agentplan_DEFAULT_REFRESH_MS;
 const __volc_agentplan_TAB_ORDER = ['monthly', 'quarterly', 'yearly'];
 const __volc_agentplan_TAB_LABELS = { monthly: '月付', quarterly: '季付', yearly: '年付' };
@@ -53,15 +54,21 @@ function __volc_agentplan_ensureDefaultSelection() {
 }
 
 async function __volc_agentplan_extractAndSend() {
-  const items = __volc_agentplan_parseBundle();
-  if (items.length === 0) return false;
-  const prices = await __volc_agentplan_fetchAllPrices(items);
-  __volc_agentplan_catalogData = __volc_agentplan_buildCatalog(items, prices);
-  __volc_agentplan_ensureDefaultSelection();
-  __volc_agentplan_ensureActiveTab();
-  __volc_agentplan_postCmd('VOLC_CATALOG', { catalog: __volc_agentplan_catalogData });
-  __volc_agentplan_render();
-  return true;
+  if (__volc_agentplan_isExtracting) return false;
+  __volc_agentplan_isExtracting = true;
+  try {
+    const items = __volc_agentplan_parseBundle();
+    if (items.length === 0) return false;
+    const prices = await __volc_agentplan_fetchAllPrices(items);
+    __volc_agentplan_catalogData = __volc_agentplan_buildCatalog(items, prices);
+    __volc_agentplan_ensureDefaultSelection();
+    __volc_agentplan_ensureActiveTab();
+    __volc_agentplan_postCmd('VOLC_CATALOG', { catalog: __volc_agentplan_catalogData });
+    __volc_agentplan_render();
+    return true;
+  } finally {
+    __volc_agentplan_isExtracting = false;
+  }
 }
 
 function __volc_agentplan_createOverlay() {
@@ -194,12 +201,34 @@ function __volc_agentplan_render() {
   }
   html += '</div>';
 
-  const canStart = __volc_agentplan_selectedProductIds.size > 0 && !__volc_agentplan_isRefreshing;
-  const btnText = __volc_agentplan_isRefreshing ? '停止刷新库存' : '开始刷新库存';
+  const authState = __volc_agentplan_vh_readLoginState();
+  const isLoggedIn = authState.loggedIn;
+  __volc_agentplan_isLoggedIn = isLoggedIn;
+  const hasSelection = __volc_agentplan_selectedProductIds.size > 0;
+
+  let btnText, btnEnabled, btnBg;
+  if (__volc_agentplan_isRefreshing) {
+    btnText = '停止刷新库存';
+    btnEnabled = true;
+    btnBg = '#475569,#64748b';
+  } else if (!isLoggedIn) {
+    btnText = '请先登录';
+    btnEnabled = true;
+    btnBg = '#dc2626,#ef4444';
+  } else if (!hasSelection) {
+    btnText = '请选择商品';
+    btnEnabled = false;
+    btnBg = '#94a3b8,#cbd5e1';
+  } else {
+    btnText = '开始刷新库存';
+    btnEnabled = true;
+    btnBg = '#dc2626,#ef4444';
+  }
+
   html += '<button id="__volc_buy" style="' +
     'width:100%;padding:10px;border:0;border-radius:10px;' +
-    'background:linear-gradient(135deg,' + (__volc_agentplan_isRefreshing ? '#475569,#64748b' : '#dc2626,#ef4444') + ');color:#fff;font-weight:800;font-size:12px;cursor:pointer' +
-    '" ' + (canStart || __volc_agentplan_isRefreshing ? '' : 'disabled') + '>' +
+    'background:linear-gradient(135deg,' + btnBg + ');color:#fff;font-weight:800;font-size:12px;cursor:' + (btnEnabled ? 'pointer' : 'not-allowed') + ';opacity:' + (btnEnabled ? '1' : '0.6') + ';' +
+    '" ' + (btnEnabled ? '' : 'disabled') + '>' +
     btnText +
     '</button>';
 
@@ -216,6 +245,10 @@ function __volc_agentplan_render() {
     '</div>';
 
   html += '<div id="__volc_status" style="margin-top:8px;font-size:10px;color:#64748b;min-height:14px"></div>';
+
+  if (!__volc_agentplan_isRefreshing && !isLoggedIn) {
+    __volc_agentplan_setStatus('请先登录后再刷新库存');
+  }
 
   root.innerHTML = html;
 
@@ -247,7 +280,19 @@ function __volc_agentplan_render() {
     btn.addEventListener('click', function () {
       if (__volc_agentplan_isRefreshing) {
         __volc_agentplan_stopRefresh('已手动停止');
-      } else if (__volc_agentplan_selectedProductIds.size > 0) {
+        return;
+      }
+      if (!__volc_agentplan_vh_readLoginState().loggedIn) {
+        __volc_agentplan_setStatus('请先登录后再刷新库存');
+        const siteBtn = document.querySelector('.volcfe-nav-login-btn');
+        if (siteBtn) {
+          siteBtn.click();
+        } else {
+          window.location.assign('https://www.volcengine.com/login');
+        }
+        return;
+      }
+      if (__volc_agentplan_selectedProductIds.size > 0) {
         __volc_agentplan_startRefresh();
       }
     });
@@ -263,8 +308,8 @@ function __volc_agentplan_render() {
       __volc_agentplan_refreshIntervalMs = value;
       intervalLabel.textContent = (value / 1000).toFixed(1) + 's';
       if (__volc_agentplan_isRefreshing && __volc_agentplan_refreshTimer) {
-        clearInterval(__volc_agentplan_refreshTimer);
-        __volc_agentplan_refreshTimer = setInterval(__volc_agentplan_tick, __volc_agentplan_refreshIntervalMs);
+        clearTimeout(__volc_agentplan_refreshTimer);
+        __volc_agentplan_refreshTimer = setTimeout(__volc_agentplan_tick, __volc_agentplan_refreshIntervalMs);
       }
     });
   }
@@ -282,21 +327,24 @@ function __volc_agentplan_statusWithCount(text) {
 function __volc_agentplan_startRefresh() {
   if (__volc_agentplan_isRefreshing) return;
   if (__volc_agentplan_selectedProductIds.size === 0) return;
+  const authState = __volc_agentplan_vh_readLoginState();
+  if (!authState.loggedIn) {
+    __volc_agentplan_setStatus('请先登录后再刷新库存');
+    return;
+  }
   __volc_agentplan_refreshQueue = Array.from(__volc_agentplan_selectedProductIds);
-  __volc_agentplan_currentRefreshIndex = 0;
   __volc_agentplan_refreshCount = 0;
   __volc_agentplan_isRefreshing = true;
-  __volc_agentplan_setStatus('开始刷新库存，已选 ' + __volc_agentplan_refreshQueue.length + ' 个商品，每 ' + (__volc_agentplan_refreshIntervalMs / 1000).toFixed(1) + ' 秒轮询一次');
+  __volc_agentplan_setStatus('开始刷新库存，已选 ' + __volc_agentplan_refreshQueue.length + ' 个商品，每 ' + (__volc_agentplan_refreshIntervalMs / 1000).toFixed(1) + ' 秒尝试一轮');
   __volc_agentplan_render();
   __volc_agentplan_tick();
-  __volc_agentplan_refreshTimer = setInterval(__volc_agentplan_tick, __volc_agentplan_refreshIntervalMs);
 }
 
 function __volc_agentplan_stopRefresh(reason) {
   if (!__volc_agentplan_isRefreshing) return;
   __volc_agentplan_isRefreshing = false;
   if (__volc_agentplan_refreshTimer) {
-    clearInterval(__volc_agentplan_refreshTimer);
+    clearTimeout(__volc_agentplan_refreshTimer);
     __volc_agentplan_refreshTimer = null;
   }
   __volc_agentplan_setStatus(reason || '已停止刷新');
@@ -305,20 +353,34 @@ function __volc_agentplan_stopRefresh(reason) {
 
 async function __volc_agentplan_tick() {
   if (!__volc_agentplan_isRefreshing || __volc_agentplan_refreshQueue.length === 0) return;
+
+  if (!__volc_agentplan_vh_readLoginState().loggedIn) {
+    __volc_agentplan_stopRefresh('登录状态已失效，已停止刷新');
+    return;
+  }
+
   __volc_agentplan_refreshCount++;
-  const productId = __volc_agentplan_refreshQueue[__volc_agentplan_currentRefreshIndex];
-  __volc_agentplan_currentRefreshIndex = (__volc_agentplan_currentRefreshIndex + 1) % __volc_agentplan_refreshQueue.length;
+
   const all = [].concat(
     __volc_agentplan_catalogData.groups.monthly,
     __volc_agentplan_catalogData.groups.quarterly,
     __volc_agentplan_catalogData.groups.yearly,
   );
-  const product = all.find(function (p) { return p.id === productId; });
-  __volc_agentplan_setStatus(__volc_agentplan_statusWithCount(__volc_agentplan_formatProductTag(product) + '正在尝试下单…'));
-  const success = await __volc_agentplan_createOrder(productId);
-  if (success) {
-    __volc_agentplan_stopRefresh('订单创建成功，停止刷新');
+
+  for (let i = 0; i < __volc_agentplan_refreshQueue.length; i++) {
+    if (!__volc_agentplan_isRefreshing) return;
+    const productId = __volc_agentplan_refreshQueue[i];
+    const product = all.find(function (p) { return p.id === productId; });
+    __volc_agentplan_setStatus(__volc_agentplan_statusWithCount(__volc_agentplan_formatProductTag(product) + '正在尝试下单…'));
+    const success = await __volc_agentplan_createOrder(productId);
+    if (success) {
+      __volc_agentplan_stopRefresh('订单创建成功，停止刷新');
+      return;
+    }
   }
+
+  if (!__volc_agentplan_isRefreshing) return;
+  __volc_agentplan_refreshTimer = setTimeout(__volc_agentplan_tick, __volc_agentplan_refreshIntervalMs);
 }
 
 // Header auth pills (same pattern as the legacy overlay).
@@ -416,6 +478,7 @@ function __volc_agentplan_vh_updateAuth() {
 
   const state = __volc_agentplan_vh_readLoginState();
   const isLoggedIn = state.loggedIn;
+  __volc_agentplan_isLoggedIn = isLoggedIn;
 
   const ckTip = 'Volcengine CSRF cookie\n' +
     'csrfToken: ' + (hasCsrf ? __volc_agentplan_vh_mask(csrf, 6) : '(missing)') + '\n' +

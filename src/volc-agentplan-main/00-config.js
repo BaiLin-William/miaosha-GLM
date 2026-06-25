@@ -2,7 +2,7 @@
 const __volc_agentplan_version =
   (typeof document !== 'undefined' && document.currentScript?.dataset?.version) ||
   (typeof chrome !== 'undefined' && chrome?.runtime?.getManifest?.()?.version) ||
-  '1.4.1';
+  '1.4.2';
 
 const __volc_agentplan_config = {
   platform: 'volcengine-agentplan',

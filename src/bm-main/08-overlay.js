@@ -3,7 +3,7 @@ function buildHTML() {
   return '<style>' + CSS + '</style>' +
 
     // Header
-    '<div class="h"><span>&#128736;</span><h3>智谱秒杀助手</h3><span class="ver">v1.4.1</span><button class="opts" id="_opts" title="Open options">&#9881;</button><button class="mn" id="_mn">&#8722;</button></div>' +
+    '<div class="h"><span>&#128736;</span><h3>智谱秒杀助手</h3><span class="ver">v1.4.2</span><button class="opts" id="_opts" title="Open options">&#9881;</button><button class="mn" id="_mn">&#8722;</button></div>' +
     '<div class="b" id="_bd">' +
 
     // Card 1: Preparations

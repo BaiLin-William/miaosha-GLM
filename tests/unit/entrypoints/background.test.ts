@@ -4,7 +4,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing/fake-browser';
-import { rescheduleSaleAlarms, computeBadgeAlarmPlan, getCurrentBadgePhase } from '../../../entrypoints/background';
+import { rescheduleSaleAlarms, computeBadgeAlarmPlan, getCurrentBadgePhase, scheduleBadgeAlerts, getBadgeStateForTime } from '../../../entrypoints/background';
 import {
   SALE_TIME_DEFAULT,
   createSaleAlarmStatusSnapshot,
@@ -204,5 +204,130 @@ describe('getCurrentBadgePhase', () => {
     expect(getCurrentBadgePhase(saleTime, saleTime - 5 * 60_000 + 60_000)).toBeNull();
 
     expect(getCurrentBadgePhase(saleTime, saleTime)).toBeNull();
+  });
+});
+
+describe('getBadgeStateForTime', () => {
+  it('returns 60 badge at exactly T-60', () => {
+    const saleTime = atUtc('2026-05-31T02:00:00.000Z');
+    const state = getBadgeStateForTime(saleTime, saleTime - 60 * 60_000);
+    expect(state).toEqual({ text: '60', color: '#0ea5e9', title: '距秒杀 60 分钟' });
+  });
+
+  it('returns null in the gap between T-60 and T-30 windows', () => {
+    const saleTime = atUtc('2026-05-31T02:00:00.000Z');
+    const state = getBadgeStateForTime(saleTime, saleTime - 59 * 60_000);
+    expect(state).toBeNull();
+  });
+
+  it('returns 30 badge inside the T-30 window', () => {
+    const saleTime = atUtc('2026-05-31T02:00:00.000Z');
+    const state = getBadgeStateForTime(saleTime, saleTime - 30 * 60_000 + 30_000);
+    expect(state).toEqual({ text: '30', color: '#6366f1', title: '距秒杀 30 分钟' });
+  });
+
+  it('returns fire badge during the T-0 window', () => {
+    const saleTime = atUtc('2026-05-31T02:00:00.000Z');
+    const state = getBadgeStateForTime(saleTime, saleTime + 30_000);
+    expect(state).toEqual({ text: '🔥', color: '#dc2626', title: '秒杀进行中！' });
+  });
+
+  it('returns null after the fire window ends', () => {
+    const saleTime = atUtc('2026-05-31T02:00:00.000Z');
+    const state = getBadgeStateForTime(saleTime, saleTime + 90_000);
+    expect(state).toBeNull();
+  });
+});
+
+describe('scheduleBadgeAlerts', () => {
+  it('creates countdown badge alarms plus a periodic calibration alarm', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // 08:30 UTC+8, before T-60 (09:00)
+    vi.setSystemTime(atUtc('2026-05-31T00:30:00.000Z'));
+    await saleTimeStore.set(DEFAULT_CONFIG);
+
+    await scheduleBadgeAlerts();
+
+    const alarms = await fakeBrowser.alarms.getAll();
+    const names = alarms.map((a) => a.name).sort();
+    expect(names).toEqual([
+      'badge-calibrate',
+      'badge-fire',
+      'badge-fire-hide',
+      'badge-hide-10',
+      'badge-hide-15',
+      'badge-hide-30',
+      'badge-hide-5',
+      'badge-hide-60',
+      'badge-show-10',
+      'badge-show-15',
+      'badge-show-30',
+      'badge-show-5',
+      'badge-show-60',
+    ]);
+  });
+
+  it('recovers and re-creates countdown alarms when they are missing (service worker restart fallback)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // 09:32 UTC+8: T-60/T-30 have passed, T-15 (09:45) and later are still future.
+    vi.setSystemTime(atUtc('2026-05-31T01:32:00.000Z'));
+    await saleTimeStore.set(DEFAULT_CONFIG);
+
+    // Initial scheduling.
+    await scheduleBadgeAlerts();
+    let alarms = await fakeBrowser.alarms.getAll();
+    expect(alarms.some((a) => a.name === 'badge-show-15')).toBe(true);
+
+    // Simulate a service-worker restart that lost all countdown alarms but
+    // left the calibration alarm behind.
+    await Promise.all(
+      alarms
+        .filter(
+          (a) =>
+            a.name.startsWith('badge-show-') ||
+            a.name.startsWith('badge-hide-') ||
+            a.name === 'badge-fire' ||
+            a.name === 'badge-fire-hide',
+        )
+        .map((a) => fakeBrowser.alarms.clear(a.name)),
+    );
+
+    // Recovery path: scheduleBadgeAlerts re-creates the missing alarms.
+    await scheduleBadgeAlerts();
+
+    alarms = await fakeBrowser.alarms.getAll();
+    expect(alarms.some((a) => a.name === 'badge-show-15')).toBe(true);
+    expect(alarms.some((a) => a.name === 'badge-show-10')).toBe(true);
+    expect(alarms.some((a) => a.name === 'badge-show-5')).toBe(true);
+    expect(alarms.some((a) => a.name === 'badge-fire')).toBe(true);
+    expect(alarms.some((a) => a.name === 'badge-calibrate')).toBe(true);
+  });
+
+  it('sets the visible badge when called inside a countdown window', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    await saleTimeStore.set(DEFAULT_CONFIG);
+    const saleTime = getNextSaleTime(DEFAULT_CONFIG, Date.now());
+    // T-30 + 30s: inside the 30-minute badge window.
+    vi.setSystemTime(saleTime - 30 * 60_000 + 30_000);
+
+    await scheduleBadgeAlerts();
+
+    const text = await fakeBrowser.action.getBadgeText({});
+    expect(text).toBe('30');
+  });
+
+  it('clears the visible badge when called outside any countdown window', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    await saleTimeStore.set(DEFAULT_CONFIG);
+    const saleTime = getNextSaleTime(DEFAULT_CONFIG, Date.now());
+    // Set a stale badge first.
+    await fakeBrowser.action.setBadgeText({ text: '60' });
+    // T-59: outside any badge window.
+    vi.setSystemTime(saleTime - 59 * 60_000);
+
+    await scheduleBadgeAlerts();
+
+    const text = await fakeBrowser.action.getBadgeText({});
+    expect(text).toBe('');
   });
 });
