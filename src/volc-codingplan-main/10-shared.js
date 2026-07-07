@@ -1,3 +1,5 @@
+// IndexKey collection for quarterly/yearly probe
+const __volc_codingplan_allIndexKeys = [];
 // Mechanical helpers used by the Agent Plan MAIN-world overlay.
 
 function __volc_codingplan_postCmd(type, data) {
@@ -99,6 +101,9 @@ function __volc_codingplan_parseBundle() {
     if (end < 0) continue;
     const objSrc = src.slice(start, end + 1);
     const indexKey = __volc_codingplan_extractQuoted(objSrc, 'IndexKey');
+    if (indexKey && __volc_codingplan_allIndexKeys.indexOf(indexKey) === -1) {
+      __volc_codingplan_allIndexKeys.push(indexKey);
+    }
     const arraySrc = __volc_codingplan_extractBalancedArray(src, idx);
     if (!indexKey || !arraySrc) continue;
 

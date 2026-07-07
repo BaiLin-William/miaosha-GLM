@@ -1,4 +1,46 @@
-// UI rendering, header pills, selection state and refresh loop for Agent Plan.
+// Quarterly/yearly probe: auto-determine correct IndexKey
+const __volc_agentplan_codeOverrides = {};
+let __volc_agentplan_refreshAllowed = false;
+
+function __volc_agentplan_scanBlocks() {
+  try {
+    const f = window[__volc_agentplan_config.globalName];
+    if (typeof f !== "function") return;
+    const src = f.toString();
+    let idx = -1, n = 0;
+    while ((idx = src.indexOf("commonBuyOpenApi:", idx + 1)) !== -1) {
+      n++;
+      const start = __volc_agentplan_findObjectStart(src, idx);
+      const end = start >= 0 ? __volc_agentplan_findMatchingBrace(src, start) : -1;
+      const objSrc = start >= 0 && end >= 0 ? src.slice(start, end + 1) : "";
+      const ik = __volc_agentplan_extractQuoted(objSrc, "IndexKey");
+      const arrSrc = __volc_agentplan_extractBalancedArray(src, idx);
+      let s = "?";
+      if (arrSrc) {
+        try {
+          const jsonLike = arrSrc.replace(/([{,])([a-zA-Z_][a-zA-Z0-9_]*):/g, "$1\"$2\":");
+          const list = JSON.parse(jsonLike);
+          s = list.map(function(b) { return (b.ConfigurationCode || "?") + "|d" + (b.Duration || 1); }).join(", ");
+        } catch(e) { s = "(fail)"; }
+      }
+      console.log("[volc-codingplan-main] block#" + n + " key=" + (ik || "?") + " items=[" + s + "]");
+    }
+  } catch(e) { console.warn("[volc-codingplan-main] scanBlocks fail: " + e); }
+}
+
+function __volc_agentplan_probeNonMonthly() {
+  if (!__volc_agentplan_catalogData) return;
+  const all = [].concat(__volc_agentplan_catalogData.groups.quarterly, __volc_agentplan_catalogData.groups.yearly);
+  all.sort(function(a, b) { return (b.currentAmount || 0) - (a.currentAmount || 0); });
+  (async function() {
+    for (let i = 0; i < all.length; i++) {
+      try { await __volc_agentplan_probeCode(all[i]); } catch(e) { console.warn("[volc-codingplan-main] probe error: " + e); }
+    }
+    console.log("[volc-codingplan-main] probe done.");
+  })();
+}
+
+// UI rendering, header pills, selection state and refresh loop for Coding Plan.
 
 let __volc_agentplan_catalogData = null;
 let __volc_agentplan_selectedProductIds = new Set();
@@ -59,12 +101,15 @@ async function __volc_agentplan_extractAndSend() {
   try {
     const items = __volc_agentplan_parseBundle();
     if (items.length === 0) return false;
+    console.log('[volc-codingplan-main] bundle all keys: [' + __volc_agentplan_allIndexKeys.join(', ') + ']');
+    __volc_agentplan_scanBlocks();
     const prices = await __volc_agentplan_fetchAllPrices(items);
     __volc_agentplan_catalogData = __volc_agentplan_buildCatalog(items, prices);
     __volc_agentplan_ensureDefaultSelection();
     __volc_agentplan_ensureActiveTab();
     __volc_agentplan_postCmd('VOLC_CATALOG', { catalog: __volc_agentplan_catalogData });
     __volc_agentplan_render();
+    __volc_agentplan_probeNonMonthly();
     return true;
   } finally {
     __volc_agentplan_isExtracting = false;
@@ -327,6 +372,17 @@ function __volc_agentplan_statusWithCount(text) {
 function __volc_agentplan_startRefresh() {
   if (__volc_agentplan_isRefreshing) return;
   if (__volc_agentplan_selectedProductIds.size === 0) return;
+  try {
+    const lastPurchase = localStorage.getItem('__volc_purchased_at');
+    if (lastPurchase) {
+      const elapsed = Date.now() - parseInt(lastPurchase, 10);
+      if (elapsed < 120000) {
+        __volc_agentplan_setStatus('order recently created, retry in ' + Math.ceil((120000 - elapsed) / 1000) + 's');
+        return;
+      }
+      localStorage.removeItem('__volc_purchased_at');
+    }
+  } catch(e) {}
   const authState = __volc_agentplan_vh_readLoginState();
   if (!authState.loggedIn) {
     __volc_agentplan_setStatus('请先登录后再刷新库存');
@@ -335,6 +391,7 @@ function __volc_agentplan_startRefresh() {
   __volc_agentplan_refreshQueue = Array.from(__volc_agentplan_selectedProductIds);
   __volc_agentplan_refreshCount = 0;
   __volc_agentplan_isRefreshing = true;
+  __volc_agentplan_refreshAllowed = true;
   __volc_agentplan_setStatus('开始刷新库存，已选 ' + __volc_agentplan_refreshQueue.length + ' 个商品，每 ' + (__volc_agentplan_refreshIntervalMs / 1000).toFixed(1) + ' 秒尝试一轮');
   __volc_agentplan_render();
   __volc_agentplan_tick();
@@ -352,6 +409,7 @@ function __volc_agentplan_stopRefresh(reason) {
 }
 
 async function __volc_agentplan_tick() {
+  if (!__volc_agentplan_refreshAllowed) return;
   if (!__volc_agentplan_isRefreshing || __volc_agentplan_refreshQueue.length === 0) return;
 
   if (!__volc_agentplan_vh_readLoginState().loggedIn) {
@@ -372,9 +430,14 @@ async function __volc_agentplan_tick() {
     const productId = __volc_agentplan_refreshQueue[i];
     const product = all.find(function (p) { return p.id === productId; });
     __volc_agentplan_setStatus(__volc_agentplan_statusWithCount(__volc_agentplan_formatProductTag(product) + '正在尝试下单…'));
-    const success = await __volc_agentplan_createOrder(productId);
-    if (success) {
-      __volc_agentplan_stopRefresh('订单创建成功，停止刷新');
+    const result = await __volc_agentplan_createOrder(productId);
+    if (typeof result === 'object' && result.payUrl) {
+      __volc_agentplan_stopRefresh('order created, please complete payment');
+      try { window.open(result.payUrl, '_blank'); } catch(e) { window.location.assign(result.payUrl); }
+      return;
+    }
+    if (result === true || (typeof result === 'object' && result.ok)) {
+      __volc_agentplan_stopRefresh('order created, refresh stopped');
       return;
     }
   }
